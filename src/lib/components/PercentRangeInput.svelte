@@ -26,9 +26,15 @@
 
 <div class="range" role="group" aria-label="Ladestand">
   <div class="numbers">
-    <PercentInput label={labels.start} bind:value={start} />
-    <span class="arrow" aria-hidden="true">→</span>
-    <PercentInput label={labels.end} bind:value={end} />
+    <!-- The inputs carry these labels for screen readers already. -->
+    <span class="label start" aria-hidden="true">{labels.start}</span>
+    <span class="label end" aria-hidden="true">{labels.end}</span>
+    <div class="start"><PercentInput label={labels.start} bind:value={start} /></div>
+    <!-- Material Icons "arrow_forward" (Apache License 2.0). -->
+    <svg class="arrow" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z" />
+    </svg>
+    <div class="end"><PercentInput label={labels.end} bind:value={end} /></div>
   </div>
   {#each ['start', 'end'] as const as handle (handle)}
     <input
@@ -49,16 +55,35 @@
     flex-direction: column;
   }
 
+  /* Labels in the first row, numbers in the second, the arrow between the numbers. */
   .numbers {
-    display: flex;
-    justify-content: center;
-    align-items: baseline;
-    gap: var(--space-4);
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    justify-items: center;
+    align-items: center;
+    column-gap: var(--space-2);
+  }
+
+  .start {
+    grid-column: 1;
+  }
+
+  .end {
+    grid-column: 3;
+  }
+
+  .label {
+    grid-row: 1;
+    font-size: var(--font-size-label);
+    color: var(--color-on-surface-variant);
   }
 
   .arrow {
-    font-size: 1.5rem;
-    color: var(--color-on-surface-variant);
+    grid-row: 2;
+    grid-column: 2;
+    width: 32px;
+    height: 32px;
+    fill: var(--color-on-surface-variant);
   }
 
   input[type='range'] {
