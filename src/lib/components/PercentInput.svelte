@@ -4,10 +4,13 @@
   let {
     label,
     value = $bindable(),
+    steps = true,
   }: {
     label: string;
     /** Whole percent, kept within 0–100. */
     value: number;
+    /** Show the −/+ buttons beside the number. */
+    steps?: boolean;
   } = $props();
 
   const clamp = (n: number) => Math.min(100, Math.max(0, Math.round(n)));
@@ -64,15 +67,17 @@
 <div class="percent" role="group" aria-label={label}>
   <span class="label">{label}</span>
   <div class="row">
-    <button
-      type="button"
-      class="step"
-      aria-label="{label} verringern"
-      disabled={value <= 0}
-      onclick={() => (value = clamp(value - 1))}
-    >
-      −
-    </button>
+    {#if steps}
+      <button
+        type="button"
+        class="step"
+        aria-label="{label} verringern"
+        disabled={value <= 0}
+        onclick={() => (value = clamp(value - 1))}
+      >
+        −
+      </button>
+    {/if}
     <label class="number">
       <input
         bind:value={text}
@@ -88,15 +93,17 @@
       />
       <span aria-hidden="true">%</span>
     </label>
-    <button
-      type="button"
-      class="step"
-      aria-label="{label} erhöhen"
-      disabled={value >= 100}
-      onclick={() => (value = clamp(value + 1))}
-    >
-      +
-    </button>
+    {#if steps}
+      <button
+        type="button"
+        class="step"
+        aria-label="{label} erhöhen"
+        disabled={value >= 100}
+        onclick={() => (value = clamp(value + 1))}
+      >
+        +
+      </button>
+    {/if}
   </div>
 </div>
 
