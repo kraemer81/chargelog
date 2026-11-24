@@ -32,7 +32,7 @@ npm test           # Vitest, single run
 npm run test:watch # Vitest in watch mode
 ```
 
-Tests exercise the public interface of the ChargeLog store (`src/lib/store/store.ts`) against a real Dexie database running on `fake-indexeddb`, with a fresh database per test. See `src/lib/store/store.test.ts` for the pattern. Svelte components only talk to the store and are not unit-tested.
+Tests exercise the public interface of the ChargeLog store (`src/lib/store/store.ts`) against a real Dexie database running on `fake-indexeddb`, with a fresh database per test. See `src/lib/store/store.test.ts` for the pattern. Pure UI helpers in `src/lib/` (e.g. `percentRange.ts`) have their own small tests; Svelte components are not unit-tested.
 
 ## Deploy
 
@@ -52,6 +52,7 @@ src/
   lib/store/store.ts      ChargeLog store: all domain behaviour and persistence
   lib/format.ts           German number/date formatting and number parsing for the UI
   lib/insertedText.ts     finds the text typed into an input (first digit replaces the percent value)
+  lib/percentRange.ts     moves start/end of a charge without letting them cross (sliders)
   lib/components/         shared UI components
   tabs/                   Laden, Verlauf, Einstellungen
 public/favicon.svg        source for all generated app icons (pwa-assets.config.ts)

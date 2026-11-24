@@ -4,13 +4,11 @@
   let {
     label,
     value = $bindable(),
-    steps = true,
   }: {
+    /** Read out by screen readers, e.g. "Start". */
     label: string;
     /** Whole percent, kept within 0–100. */
     value: number;
-    /** Show the −/+ buttons beside the number. */
-    steps?: boolean;
   } = $props();
 
   const clamp = (n: number) => Math.min(100, Math.max(0, Math.round(n)));
@@ -64,82 +62,23 @@
   }
 </script>
 
-<div class="percent" role="group" aria-label={label}>
-  <span class="label">{label}</span>
-  <div class="row">
-    {#if steps}
-      <button
-        type="button"
-        class="step"
-        aria-label="{label} verringern"
-        disabled={value <= 0}
-        onclick={() => (value = clamp(value - 1))}
-      >
-        −
-      </button>
-    {/if}
-    <label class="number">
-      <input
-        bind:value={text}
-        {oninput}
-        {onkeydown}
-        {onfocus}
-        {onblur}
-        inputmode="numeric"
-        pattern="[0-9]*"
-        enterkeyhint="done"
-        autocomplete="off"
-        aria-label="{label} in Prozent"
-      />
-      <span aria-hidden="true">%</span>
-    </label>
-    {#if steps}
-      <button
-        type="button"
-        class="step"
-        aria-label="{label} erhöhen"
-        disabled={value >= 100}
-        onclick={() => (value = clamp(value + 1))}
-      >
-        +
-      </button>
-    {/if}
-  </div>
-</div>
+<label class="number">
+  <input
+    bind:value={text}
+    {oninput}
+    {onkeydown}
+    {onfocus}
+    {onblur}
+    inputmode="numeric"
+    pattern="[0-9]*"
+    enterkeyhint="done"
+    autocomplete="off"
+    aria-label="{label} in Prozent"
+  />
+  <span aria-hidden="true">%</span>
+</label>
 
 <style>
-  .percent {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-1);
-    min-width: 0;
-  }
-
-  .label {
-    font-size: var(--font-size-label);
-    color: var(--color-on-surface-variant);
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-  }
-
-  .step {
-    width: var(--touch-target);
-    height: var(--touch-target);
-    flex: none;
-    border: none;
-    border-radius: var(--radius-full);
-    background: var(--color-secondary-container);
-    color: var(--color-on-secondary-container);
-    font-size: 1.5rem;
-    line-height: 1;
-    cursor: pointer;
-  }
-
   .number {
     display: flex;
     align-items: baseline;

@@ -7,15 +7,6 @@ const BASE = '/chargelog/';
 
 export default defineConfig({
   base: BASE,
-  build: {
-    rolldownOptions: {
-      input: {
-        main: 'index.html',
-        // Throwaway comparison page for issue #13, removed once a variant is picked.
-        prototype: 'prototype.html',
-      },
-    },
-  },
   plugins: [
     svelte(),
     VitePWA({

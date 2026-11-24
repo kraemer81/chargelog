@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import PercentInput from '../lib/components/PercentInput.svelte';
+  import PercentRangeInput from '../lib/components/PercentRangeInput.svelte';
   import { formatEuro, formatIsoDate, formatKwh, todayIsoDate } from '../lib/format';
   import { useStore } from '../lib/store/context';
   import {
@@ -148,10 +148,7 @@
       <input type="date" bind:value={date} required />
     </label>
 
-    <div class="percentages">
-      <PercentInput label="Start" bind:value={startPercent} />
-      <PercentInput label="Ende" bind:value={endPercent} />
-    </div>
+    <PercentRangeInput bind:start={startPercent} bind:end={endPercent} />
 
     <div class="preview" aria-live="polite">
       {#if preview}
@@ -273,13 +270,6 @@
   .field select:focus {
     outline: 2px solid var(--color-primary);
     outline-offset: -1px;
-  }
-
-  .percentages {
-    display: flex;
-    justify-content: space-around;
-    flex-wrap: wrap;
-    gap: var(--space-4);
   }
 
   .preview {
