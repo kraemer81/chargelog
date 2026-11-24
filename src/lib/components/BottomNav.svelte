@@ -46,8 +46,9 @@
     position: fixed;
     inset: auto 0 0 0;
     display: flex;
+    gap: var(--space-2);
     height: calc(var(--nav-height) + env(safe-area-inset-bottom));
-    padding-bottom: env(safe-area-inset-bottom);
+    padding: var(--space-2) var(--space-2) calc(var(--space-2) + env(safe-area-inset-bottom));
     background: var(--color-surface-container);
   }
 
@@ -60,18 +61,16 @@
     gap: var(--space-1);
     min-height: var(--touch-target);
     border: none;
+    border-radius: var(--radius-l);
     background: none;
     color: var(--color-on-surface-variant);
     cursor: pointer;
+    transition: background-color 150ms ease;
   }
 
   .indicator {
     display: grid;
     place-items: center;
-    width: 64px;
-    height: 32px;
-    border-radius: var(--radius-full);
-    transition: background-color 150ms ease;
   }
 
   svg {
@@ -86,10 +85,6 @@
   }
 
   .active {
-    color: var(--color-on-surface);
-  }
-
-  .active .indicator {
     background: var(--color-secondary-container);
     color: var(--color-on-secondary-container);
   }
