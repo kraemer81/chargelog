@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import VehiclesCard from '../lib/components/VehiclesCard.svelte';
   import { useStore } from '../lib/store/context';
   import type { ThemePreference } from '../lib/store/store';
 
@@ -25,6 +26,8 @@
 
 <h1>Einstellungen</h1>
 
+<VehiclesCard />
+
 <section class="card">
   <h2 id="theme-heading">Design</h2>
   <div class="segmented" role="radiogroup" aria-labelledby="theme-heading">
@@ -45,17 +48,6 @@
   h1 {
     font-size: var(--font-size-title);
     margin-bottom: var(--space-4);
-  }
-
-  h2 {
-    font-size: var(--font-size-body);
-    margin-bottom: var(--space-3);
-  }
-
-  .card {
-    padding: var(--space-4);
-    border-radius: var(--radius-l);
-    background: var(--color-surface-container);
   }
 
   .segmented {

@@ -22,6 +22,7 @@
   --color-outline: light-dark(#707973, #8a938c);
   --color-outline-variant: light-dark(#c0c9c1, #404943);
   --color-error: light-dark(#ba1a1a, #ffb4ab);
+  --color-on-error: light-dark(#ffffff, #690005);
 
   --space-1: 4px;
   --space-2: 8px;
@@ -85,4 +86,62 @@ h1,
 h2 {
   margin: 0;
   font-weight: 500;
+}
+
+h2 {
+  font-size: var(--font-size-body);
+  margin-bottom: var(--space-3);
+}
+
+.card {
+  padding: var(--space-4);
+  border-radius: var(--radius-l);
+  background: var(--color-surface-container);
+}
+
+.card + .card {
+  margin-top: var(--space-4);
+}
+
+/* Buttons: text, tonal and filled variants; add .danger for destructive actions. */
+button.text,
+button.tonal,
+button.filled {
+  min-height: var(--touch-target);
+  padding: 0 var(--space-4);
+  border: none;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-label);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+button.text {
+  padding: 0 var(--space-3);
+  background: none;
+  color: var(--color-primary);
+}
+
+button.tonal {
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+}
+
+button.filled {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+button.text.danger {
+  color: var(--color-error);
+}
+
+button.filled.danger {
+  background: var(--color-error);
+  color: var(--color-on-error);
+}
+
+button:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
