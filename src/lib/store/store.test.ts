@@ -330,22 +330,6 @@ describe('charging sessions', () => {
     ).rejects.toThrow('Bitte gib ein gültiges Datum ein.');
   });
 
-  it('finds the latest session of a vehicle', async () => {
-    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
-    const outlander = await store.addVehicle({ name: 'Outlander', batteryCapacityKwh: 20 });
-    const log = (vehicleId: number, date: string, startPercent: number) =>
-      store.addSession({ vehicleId, date, startPercent, endPercent: 90 });
-    await log(id3.id, '2026-11-20', 10);
-    await log(id3.id, '2026-11-22', 20);
-    await log(id3.id, '2026-11-22', 30);
-    await log(id3.id, '2026-11-21', 40);
-    await log(outlander.id, '2026-11-23', 50);
-
-    expect((await store.getLatestSession(id3.id))?.startPercent).toBe(30);
-    expect((await store.getLatestSession(outlander.id))?.startPercent).toBe(50);
-    expect(await store.getLatestSession(999)).toBeUndefined();
-  });
-
   it('keeps the price, charging loss and cost of saved sessions when the defaults change', async () => {
     const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
     await store.updateSettings({ defaultPricePerKwh: 0.32, defaultChargingLossPercent: 10 });

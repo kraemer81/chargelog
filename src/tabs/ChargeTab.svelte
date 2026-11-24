@@ -16,8 +16,10 @@
 
   const store = useStore();
   const RECENT_LIMIT = 5;
-  /** Suggested start and end when a vehicle has no session yet. */
-  const FALLBACK = { startPercent: 20, endPercent: 80 };
+  /** Start and end preselected for every new entry. */
+  const SUGGESTED = { startPercent: 20, endPercent: 80 };
+  /** How long a just-saved session lights up in the recent list. */
+  const HIGHLIGHT_MS = 1500;
 
   let vehicles = $state<Vehicle[] | undefined>();
   let settings = $state<Settings | undefined>();
@@ -25,13 +27,15 @@
 
   let vehicleId = $state<number | undefined>();
   let date = $state(todayIsoDate());
-  let startPercent = $state(FALLBACK.startPercent);
-  let endPercent = $state(FALLBACK.endPercent);
+  let startPercent = $state(SUGGESTED.startPercent);
+  let endPercent = $state(SUGGESTED.endPercent);
   let note = $state('');
   let saving = $state(false);
   let error = $state<string | undefined>();
   let confirmation = $state<string | undefined>();
   let confirmationTimer: ReturnType<typeof setTimeout> | undefined;
+  let highlightedId = $state<number | undefined>();
+  let highlightTimer: ReturnType<typeof setTimeout> | undefined;
 
   const subscriptions = [
     store.watchVehicles().subscribe((list) => {
@@ -39,7 +43,7 @@
       // Keep the chosen vehicle while it exists; otherwise fall back to the default.
       if (!list.some((v) => v.id === vehicleId)) {
         const fallback = list.find((v) => v.isDefault) ?? list[0];
-        if (fallback) void chooseVehicle(fallback.id);
+        if (fallback) chooseVehicle(fallback.id);
         else vehicleId = undefined;
       }
     }),
@@ -49,6 +53,7 @@
   onDestroy(() => {
     subscriptions.forEach((s) => s.unsubscribe());
     clearTimeout(confirmationTimer);
+    clearTimeout(highlightTimer);
   });
 
   const vehicle = $derived(vehicles?.find((v) => v.id === vehicleId));
@@ -66,12 +71,10 @@
   );
   const vehicleNames = $derived(new Map(vehicles?.map((v) => [v.id, v.name])));
 
-  /** Selects the vehicle and suggests start/end from its latest session. */
-  async function chooseVehicle(id: number) {
+  /** Selects the vehicle and resets start/end to the suggestion. */
+  function chooseVehicle(id: number) {
     vehicleId = id;
-    const latest = await store.getLatestSession(id);
-    if (vehicleId !== id) return; // another vehicle was chosen meanwhile
-    ({ startPercent, endPercent } = latest ?? FALLBACK);
+    ({ startPercent, endPercent } = SUGGESTED);
   }
 
   async function submit(event: SubmitEvent) {
@@ -80,11 +83,13 @@
     saving = true;
     error = undefined;
     try {
-      await store.addSession({ vehicleId, date, startPercent, endPercent, note });
-      // Ready for the next entry; start/end stay as the suggestion for next time.
+      const saved = await store.addSession({ vehicleId, date, startPercent, endPercent, note });
+      // Visibly reset the form so it is clear the entry was taken.
       date = todayIsoDate();
+      ({ startPercent, endPercent } = SUGGESTED);
       note = '';
       showConfirmation('Ladevorgang gespeichert');
+      highlight(saved.id);
     } catch (e) {
       if (e instanceof ValidationError) {
         error = e.message;
@@ -101,6 +106,12 @@
     confirmation = message;
     clearTimeout(confirmationTimer);
     confirmationTimer = setTimeout(() => (confirmation = undefined), 3000);
+  }
+
+  function highlight(id: number) {
+    highlightedId = id;
+    clearTimeout(highlightTimer);
+    highlightTimer = setTimeout(() => (highlightedId = undefined), HIGHLIGHT_MS);
   }
 </script>
 
@@ -121,7 +132,7 @@
         <span>Fahrzeug</span>
         <select
           value={vehicleId}
-          onchange={(e) => void chooseVehicle(Number(e.currentTarget.value))}
+          onchange={(e) => chooseVehicle(Number(e.currentTarget.value))}
         >
           {#each vehicles as option (option.id)}
             <option value={option.id}>{option.name}</option>
@@ -176,7 +187,10 @@
       <h2>Letzte Ladevorgänge</h2>
       <ul>
         {#each recent as session (session.id)}
-          <li>
+          <li
+            class:highlighted={session.id === highlightedId}
+            style:--highlight-duration="{HIGHLIGHT_MS}ms"
+          >
             <div class="session-main">
               <span>{formatIsoDate(session.date)}</span>
               <span class="cost">{formatEuro(session.costEur)}</span>
@@ -244,6 +258,17 @@
     font-size: var(--font-size-body);
   }
 
+  /* Mobile browsers give date inputs an intrinsic width; make it fill the field. */
+  .field input[type='date'] {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* iOS Safari centres the date value by default. */
+  .field input[type='date']::-webkit-date-and-time-value {
+    text-align: left;
+  }
+
   .field input:focus,
   .field select:focus {
     outline: 2px solid var(--color-primary);
@@ -306,6 +331,24 @@
 
   li:last-child {
     border-bottom: none;
+  }
+
+  /* Bleeds a little into the card padding so the highlight doesn't hug the text. */
+  li.highlighted {
+    margin: 0 calc(-1 * var(--space-2));
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-s);
+    animation: highlight var(--highlight-duration) ease-out;
+  }
+
+  @keyframes highlight {
+    0%,
+    40% {
+      background: var(--color-primary-container);
+    }
+    100% {
+      background: transparent;
+    }
   }
 
   .session-main {

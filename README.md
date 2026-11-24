@@ -51,6 +51,7 @@ src/
   app.css                 design tokens (light/dark) and base styles
   lib/store/store.ts      ChargeLog store: all domain behaviour and persistence
   lib/format.ts           German number/date formatting and number parsing for the UI
+  lib/insertedText.ts     finds the text typed into an input (first digit replaces the percent value)
   lib/components/         shared UI components
   tabs/                   Laden, Verlauf, Einstellungen
 public/favicon.svg        source for all generated app icons (pwa-assets.config.ts)

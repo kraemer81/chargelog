@@ -164,8 +164,6 @@ export interface ChargeLogStore {
    * (later entries first within a day), and again after every change.
    */
   watchRecentSessions(limit: number): Observable<ChargingSession[]>;
-  /** The vehicle's session with the newest date (the later entry within a day). */
-  getLatestSession(vehicleId: number): Promise<ChargingSession | undefined>;
   /** Number of charging sessions logged for this vehicle. */
   countSessions(vehicleId: number): Promise<number>;
   close(): void;
@@ -317,13 +315,6 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
 
     watchRecentSessions(limit) {
       return liveQuery(() => db.sessions.orderBy('date').reverse().limit(limit).toArray());
-    },
-
-    getLatestSession(vehicleId) {
-      return db.sessions
-        .where('[vehicleId+date]')
-        .between([vehicleId, Dexie.minKey], [vehicleId, Dexie.maxKey])
-        .last();
     },
 
     countSessions(vehicleId) {

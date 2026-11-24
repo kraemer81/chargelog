@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { insertedText } from '../insertedText';
+
   let {
     label,
     value = $bindable(),
@@ -15,13 +17,23 @@
   // svelte-ignore state_referenced_locally
   let text = $state(String(value));
   let focused = $state(false);
+  // The value isn't selected on focus (that pops up the selection toolbar on
+  // phones); instead the first thing typed after focusing replaces it.
+  let replaceOnType = false;
+  let textAtFocus = '';
 
   $effect(() => {
     if (!focused) text = String(value);
   });
 
   function oninput() {
-    const digits = text.replace(/\D/g, '').slice(0, 3);
+    let typed = text;
+    if (replaceOnType) {
+      replaceOnType = false;
+      // Deleting yields nothing inserted; then edit the existing value as usual.
+      typed = insertedText(textAtFocus, text) || text;
+    }
+    const digits = typed.replace(/\D/g, '').slice(0, 3);
     if (digits === '') {
       text = '';
       return;
@@ -42,9 +54,10 @@
     text = String(value);
   }
 
-  function onfocus(event: FocusEvent) {
+  function onfocus() {
     focused = true;
-    (event.currentTarget as HTMLInputElement).select();
+    replaceOnType = true;
+    textAtFocus = text;
   }
 </script>
 
