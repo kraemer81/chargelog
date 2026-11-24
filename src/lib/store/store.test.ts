@@ -1,7 +1,11 @@
 import 'fake-indexeddb/auto';
-import Dexie from 'dexie';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { openChargeLogStore, type ChargeLogStore } from './store';
+import {
+  calculateCharge,
+  openChargeLogStore,
+  type ChargeLogStore,
+  type ChargingSession,
+} from './store';
 
 let dbName: string;
 let store: ChargeLogStore;
@@ -30,6 +34,35 @@ describe('settings', () => {
     const settings = await store.getSettings();
 
     expect(settings.themePreference).toBe('dark');
+  });
+
+  it('offers a default price per kWh and charging loss on a fresh install', async () => {
+    const settings = await store.getSettings();
+
+    expect(settings.defaultPricePerKwh).toBe(0.3);
+    expect(settings.defaultChargingLossPercent).toBe(10);
+  });
+
+  it('keeps a changed default price and charging loss', async () => {
+    await store.updateSettings({ defaultPricePerKwh: 0.32, defaultChargingLossPercent: 12 });
+
+    const settings = await store.getSettings();
+
+    expect(settings.defaultPricePerKwh).toBe(0.32);
+    expect(settings.defaultChargingLossPercent).toBe(12);
+  });
+
+  it.each([
+    [{ defaultPricePerKwh: -0.1 }, 'Bitte gib einen Preis von mindestens 0 € ein.'],
+    [{ defaultPricePerKwh: Number.NaN }, 'Bitte gib einen Preis von mindestens 0 € ein.'],
+    [{ defaultChargingLossPercent: -1 }, 'Der Ladeverlust muss zwischen 0 und 100 % liegen.'],
+    [{ defaultChargingLossPercent: 100 }, 'Der Ladeverlust muss zwischen 0 und 100 % liegen.'],
+  ])('rejects the invalid default %o', async (changes, message) => {
+    await expect(store.updateSettings(changes)).rejects.toThrow(message);
+
+    const settings = await store.getSettings();
+    expect(settings.defaultPricePerKwh).toBe(0.3);
+    expect(settings.defaultChargingLossPercent).toBe(10);
   });
 
   it('notifies watchers when the theme changes', async () => {
@@ -148,11 +181,11 @@ describe('vehicles', () => {
   it('deletes the charging sessions of a deleted vehicle, and only those', async () => {
     const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
     const outlander = await store.addVehicle({ name: 'Outlander', batteryCapacityKwh: 20 });
-    await insertSessionFixtures([
-      { vehicleId: id3.id, date: '2026-11-01' },
-      { vehicleId: id3.id, date: '2026-11-08' },
-      { vehicleId: outlander.id, date: '2026-11-02' },
-    ]);
+    const log = (vehicleId: number, date: string) =>
+      store.addSession({ vehicleId, date, startPercent: 20, endPercent: 80 });
+    await log(id3.id, '2026-11-01');
+    await log(id3.id, '2026-11-08');
+    await log(outlander.id, '2026-11-02');
     expect(await store.countSessions(id3.id)).toBe(2);
 
     await store.deleteVehicle(id3.id);
@@ -175,16 +208,171 @@ describe('vehicles', () => {
   });
 });
 
-/**
- * Writes charging sessions straight into the database, because the store has
- * no API to log sessions yet. Replace with `store.addSession` once it exists
- * (kraemer81/chargelog#4).
- */
-async function insertSessionFixtures(sessions: { vehicleId: number; date: string }[]) {
-  const raw = new Dexie(dbName);
-  await raw.open();
-  await raw.table('sessions').bulkAdd(sessions);
-  raw.close();
+describe('charging sessions', () => {
+  it('saves the grid energy and cost calculated from the current defaults', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await store.updateSettings({ defaultPricePerKwh: 0.32, defaultChargingLossPercent: 10 });
+
+    const session = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 20,
+      endPercent: 80,
+    });
+
+    expect(session).toEqual({
+      id: expect.any(Number),
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 20,
+      endPercent: 80,
+      pricePerKwh: 0.32,
+      chargingLossPercent: 10,
+      gridEnergyKwh: 38.28,
+      costEur: 12.25,
+    });
+  });
+
+  it('saves exactly the grid energy and cost the preview shows', async () => {
+    const vehicle = await store.addVehicle({ name: 'EV6', batteryCapacityKwh: 77 });
+    await store.updateSettings({ defaultPricePerKwh: 0.35, defaultChargingLossPercent: 12 });
+    const preview = calculateCharge({
+      batteryCapacityKwh: 77,
+      startPercent: 15,
+      endPercent: 85,
+      chargingLossPercent: 12,
+      pricePerKwh: 0.35,
+    });
+
+    const saved = await store.addSession({
+      vehicleId: vehicle.id,
+      date: '2026-11-24',
+      startPercent: 15,
+      endPercent: 85,
+    });
+
+    expect(preview).toEqual({ gridEnergyKwh: 60.37, costEur: 21.13 });
+    expect(saved).toMatchObject(preview);
+  });
+
+  it('lists the most recent sessions newest first and updates right after saving', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const log = (date: string, startPercent: number) =>
+      store.addSession({ vehicleId: id3.id, date, startPercent, endPercent: 90 });
+    await log('2026-11-20', 10);
+    await log('2026-11-22', 20);
+    await log('2026-11-21', 30);
+
+    const seen: number[][] = [];
+    const subscription = store.watchRecentSessions(3).subscribe((sessions) => {
+      seen.push(sessions.map((session) => session.startPercent));
+    });
+
+    await vi.waitFor(() => expect(seen).toEqual([[20, 30, 10]]));
+    // Same day as the newest one: the later entry comes first.
+    await log('2026-11-22', 40);
+    await vi.waitFor(() => expect(seen).toEqual([[20, 30, 10], [40, 20, 30]]));
+
+    subscription.unsubscribe();
+  });
+
+  it.each([
+    [-1, 80, 'Der Start muss zwischen 0 und 100 % liegen.'],
+    [Number.NaN, 80, 'Der Start muss zwischen 0 und 100 % liegen.'],
+    [20, 101, 'Das Ende muss zwischen 0 und 100 % liegen.'],
+    [80, 80, 'Das Ende muss über dem Start liegen.'],
+    [80, 20, 'Das Ende muss über dem Start liegen.'],
+  ])('rejects a session from %s to %s percent', async (startPercent, endPercent, message) => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+
+    await expect(
+      store.addSession({ vehicleId: id3.id, date: '2026-11-24', startPercent, endPercent }),
+    ).rejects.toThrow(message);
+    expect(await store.countSessions(id3.id)).toBe(0);
+  });
+
+  it('accepts a full charge from 0 % to 100 %', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+
+    const session = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 0,
+      endPercent: 100,
+    });
+
+    expect(session.gridEnergyKwh).toBe(63.8);
+  });
+
+  it('rejects a session for a vehicle that does not exist', async () => {
+    await expect(
+      store.addSession({ vehicleId: 999, date: '2026-11-24', startPercent: 20, endPercent: 80 }),
+    ).rejects.toThrow('Bitte wähle ein Fahrzeug aus.');
+  });
+
+  it('saves a trimmed note and leaves out a blank one', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const log = (note: string) =>
+      store.addSession({ vehicleId: id3.id, date: '2026-11-24', startPercent: 20, endPercent: 80, note });
+
+    const withNote = await log('  Wallbox Garage ');
+    const blank = await log('   ');
+
+    expect(withNote.note).toBe('Wallbox Garage');
+    expect(blank).not.toHaveProperty('note');
+  });
+
+  it.each(['', '24.11.2026', '2026-13-01'])('rejects the date %o', async (date) => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+
+    await expect(
+      store.addSession({ vehicleId: id3.id, date, startPercent: 20, endPercent: 80 }),
+    ).rejects.toThrow('Bitte gib ein gültiges Datum ein.');
+  });
+
+  it('finds the latest session of a vehicle', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const outlander = await store.addVehicle({ name: 'Outlander', batteryCapacityKwh: 20 });
+    const log = (vehicleId: number, date: string, startPercent: number) =>
+      store.addSession({ vehicleId, date, startPercent, endPercent: 90 });
+    await log(id3.id, '2026-11-20', 10);
+    await log(id3.id, '2026-11-22', 20);
+    await log(id3.id, '2026-11-22', 30);
+    await log(id3.id, '2026-11-21', 40);
+    await log(outlander.id, '2026-11-23', 50);
+
+    expect((await store.getLatestSession(id3.id))?.startPercent).toBe(30);
+    expect((await store.getLatestSession(outlander.id))?.startPercent).toBe(50);
+    expect(await store.getLatestSession(999)).toBeUndefined();
+  });
+
+  it('keeps the price, charging loss and cost of saved sessions when the defaults change', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await store.updateSettings({ defaultPricePerKwh: 0.32, defaultChargingLossPercent: 10 });
+    const saved = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 20,
+      endPercent: 80,
+    });
+
+    await store.updateSettings({ defaultPricePerKwh: 0.45, defaultChargingLossPercent: 15 });
+
+    expect(await recentSessions()).toEqual([saved]);
+  });
+});
+
+/** Current value of the recent-sessions watch. */
+async function recentSessions(limit = 10) {
+  return new Promise<ChargingSession[]>((resolve, reject) => {
+    const subscription = store.watchRecentSessions(limit).subscribe({
+      next(sessions) {
+        resolve(sessions);
+        queueMicrotask(() => subscription.unsubscribe());
+      },
+      error: reject,
+    });
+  });
 }
 
 async function defaultVehicleNames(): Promise<string[]> {

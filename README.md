@@ -50,6 +50,7 @@ src/
   App.svelte              app shell: tabs, theme, update prompt
   app.css                 design tokens (light/dark) and base styles
   lib/store/store.ts      ChargeLog store: all domain behaviour and persistence
+  lib/format.ts           German number/date formatting and number parsing for the UI
   lib/components/         shared UI components
   tabs/                   Laden, Verlauf, Einstellungen
 public/favicon.svg        source for all generated app icons (pwa-assets.config.ts)

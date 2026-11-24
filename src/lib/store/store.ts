@@ -4,10 +4,16 @@ export type ThemePreference = 'system' | 'light' | 'dark';
 
 export interface Settings {
   themePreference: ThemePreference;
+  /** Electricity price in € per kWh, snapshotted into each new charging session. */
+  defaultPricePerKwh: number;
+  /** Share of grid energy lost while charging, in %, snapshotted into each new charging session. */
+  defaultChargingLossPercent: number;
 }
 
 const DEFAULT_SETTINGS: Settings = {
   themePreference: 'system',
+  defaultPricePerKwh: 0.3,
+  defaultChargingLossPercent: 10,
 };
 
 export interface Vehicle {
@@ -31,10 +37,77 @@ export class ValidationError extends Error {
   override name = 'ValidationError';
 }
 
-/** Charging session row; fields beyond the vehicle link arrive with session logging. */
-interface SessionRow {
-  id: number;
+/** What the user enters to log a charging session. */
+export interface NewChargingSession {
   vehicleId: number;
+  /** Local calendar date, `YYYY-MM-DD`. */
+  date: string;
+  /** State of charge before charging, 0–100. */
+  startPercent: number;
+  /** State of charge after charging, greater than `startPercent`, at most 100. */
+  endPercent: number;
+  note?: string;
+}
+
+/**
+ * A logged charging session. Price and charging loss are snapshots taken when
+ * it was saved, so later changes to the defaults never alter it.
+ */
+export interface ChargingSession extends NewChargingSession {
+  id: number;
+  pricePerKwh: number;
+  chargingLossPercent: number;
+  /** Energy drawn from the grid, losses included, rounded to 2 decimals. */
+  gridEnergyKwh: number;
+  /** `gridEnergyKwh` × `pricePerKwh`, rounded to 2 decimals. */
+  costEur: number;
+}
+
+export interface ChargeInput {
+  batteryCapacityKwh: number;
+  startPercent: number;
+  endPercent: number;
+  chargingLossPercent: number;
+  pricePerKwh: number;
+}
+
+/**
+ * Grid energy and cost of a charge. The single source for both the live
+ * preview and the values stored with a session, so the two always agree.
+ */
+export function calculateCharge(input: ChargeInput): { gridEnergyKwh: number; costEur: number } {
+  const chargedKwh = (input.batteryCapacityKwh * (input.endPercent - input.startPercent)) / 100;
+  const gridEnergyKwh = roundTo2Decimals(chargedKwh * (1 + input.chargingLossPercent / 100));
+  const costEur = roundTo2Decimals(gridEnergyKwh * input.pricePerKwh);
+  return { gridEnergyKwh, costEur };
+}
+
+/**
+ * Why a start/end pair of a charging session can't be saved, as a German
+ * message for the user, or `undefined` if it is valid.
+ */
+export function percentageError(startPercent: number, endPercent: number): string | undefined {
+  if (!(startPercent >= 0 && startPercent <= 100)) {
+    return 'Der Start muss zwischen 0 und 100 % liegen.';
+  }
+  if (!(endPercent >= 0 && endPercent <= 100)) {
+    return 'Das Ende muss zwischen 0 und 100 % liegen.';
+  }
+  if (endPercent <= startPercent) {
+    return 'Das Ende muss über dem Start liegen.';
+  }
+  return undefined;
+}
+
+/** True for a real calendar date written as `YYYY-MM-DD`. */
+function isIsoDate(text: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const date = new Date(`${text}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(text);
+}
+
+function roundTo2Decimals(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 interface SettingRow {
@@ -45,7 +118,7 @@ interface SettingRow {
 class ChargeLogDb extends Dexie {
   settings!: EntityTable<SettingRow, 'key'>;
   vehicles!: EntityTable<Vehicle, 'id'>;
-  sessions!: EntityTable<SessionRow, 'id'>;
+  sessions!: EntityTable<ChargingSession, 'id'>;
 
   constructor(name: string) {
     super(name);
@@ -55,6 +128,9 @@ class ChargeLogDb extends Dexie {
     this.version(2).stores({
       vehicles: '++id',
       sessions: '++id, vehicleId',
+    });
+    this.version(3).stores({
+      sessions: '++id, vehicleId, date, [vehicleId+date]',
     });
   }
 }
@@ -78,6 +154,18 @@ export interface ChargeLogStore {
   setDefaultVehicle(id: number): Promise<void>;
   /** Deletes the vehicle together with all of its charging sessions. */
   deleteVehicle(id: number): Promise<void>;
+  /**
+   * Logs a charging session with a snapshot of the current default price and
+   * charging loss, and the grid energy and cost calculated from them.
+   */
+  addSession(session: NewChargingSession): Promise<ChargingSession>;
+  /**
+   * Emits the `limit` most recent sessions of all vehicles, newest date first
+   * (later entries first within a day), and again after every change.
+   */
+  watchRecentSessions(limit: number): Observable<ChargingSession[]>;
+  /** The vehicle's session with the newest date (the later entry within a day). */
+  getLatestSession(vehicleId: number): Promise<ChargingSession | undefined>;
   /** Number of charging sessions logged for this vehicle. */
   countSessions(vehicleId: number): Promise<number>;
   close(): void;
@@ -113,6 +201,16 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     }
   }
 
+  function validateSettings(changes: Partial<Settings>): void {
+    const { defaultPricePerKwh: price, defaultChargingLossPercent: loss } = changes;
+    if (price !== undefined && !(Number.isFinite(price) && price >= 0)) {
+      throw new ValidationError('Bitte gib einen Preis von mindestens 0 € ein.');
+    }
+    if (loss !== undefined && !(loss >= 0 && loss < 100)) {
+      throw new ValidationError('Der Ladeverlust muss zwischen 0 und 100 % liegen.');
+    }
+  }
+
   async function readSettings(): Promise<Settings> {
     const rows = await db.settings.toArray();
     const stored = Object.fromEntries(rows.map((row) => [row.key, row.value]));
@@ -127,6 +225,7 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     },
 
     async updateSettings(changes) {
+      validateSettings(changes);
       const rows = Object.entries(changes).map(
         ([key, value]) => ({ key, value }) as SettingRow,
       );
@@ -178,6 +277,53 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
           if (successor) await db.vehicles.update(successor.id, { isDefault: true });
         }
       });
+    },
+
+    async addSession(session) {
+      const problem = percentageError(session.startPercent, session.endPercent);
+      if (problem) throw new ValidationError(problem);
+      if (!isIsoDate(session.date)) {
+        throw new ValidationError('Bitte gib ein gültiges Datum ein.');
+      }
+      const note = session.note?.trim();
+      return db.transaction('rw', db.vehicles, db.settings, db.sessions, async () => {
+        const vehicle = await db.vehicles.get(session.vehicleId);
+        if (!vehicle) {
+          throw new ValidationError('Bitte wähle ein Fahrzeug aus.');
+        }
+        const settings = await readSettings();
+        const pricePerKwh = settings.defaultPricePerKwh;
+        const chargingLossPercent = settings.defaultChargingLossPercent;
+        const row = {
+          vehicleId: session.vehicleId,
+          date: session.date,
+          startPercent: session.startPercent,
+          endPercent: session.endPercent,
+          ...(note ? { note } : {}),
+          pricePerKwh,
+          chargingLossPercent,
+          ...calculateCharge({
+            batteryCapacityKwh: vehicle.batteryCapacityKwh,
+            startPercent: session.startPercent,
+            endPercent: session.endPercent,
+            chargingLossPercent,
+            pricePerKwh,
+          }),
+        };
+        const id = await db.sessions.add(row as ChargingSession);
+        return { ...row, id };
+      });
+    },
+
+    watchRecentSessions(limit) {
+      return liveQuery(() => db.sessions.orderBy('date').reverse().limit(limit).toArray());
+    },
+
+    getLatestSession(vehicleId) {
+      return db.sessions
+        .where('[vehicleId+date]')
+        .between([vehicleId, Dexie.minKey], [vehicleId, Dexie.maxKey])
+        .last();
     },
 
     countSessions(vehicleId) {

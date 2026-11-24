@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { formatDecimal } from '../format';
   import { useStore } from '../store/context';
   import type { NewVehicle, Vehicle } from '../store/store';
   import VehicleForm from './VehicleForm.svelte';
 
   const store = useStore();
-  const capacityFormatter = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 2 });
 
   let vehicles = $state<Vehicle[]>([]);
   /** 'new' while adding, a vehicle id while editing that vehicle. */
@@ -70,7 +70,7 @@
             <div class="details">
               <span class="name">{vehicle.name}</span>
               <span class="capacity">
-                {capacityFormatter.format(vehicle.batteryCapacityKwh)} kWh
+                {formatDecimal(vehicle.batteryCapacityKwh)} kWh
               </span>
             </div>
             {#if vehicle.isDefault}

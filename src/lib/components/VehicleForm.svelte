@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatDecimal, parseDecimal } from '../format';
   import { ValidationError, type NewVehicle } from '../store/store';
 
   let {
@@ -15,28 +16,20 @@
     oncancel: () => void;
   } = $props();
 
-  const formatter = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 2 });
-
   // The form edits its own copy; `initial` only seeds it.
   // svelte-ignore state_referenced_locally
   let name = $state(initial?.name ?? '');
   // svelte-ignore state_referenced_locally
-  let capacity = $state(initial ? formatter.format(initial.batteryCapacityKwh) : '');
+  let capacity = $state(initial ? formatDecimal(initial.batteryCapacityKwh) : '');
   let error = $state<string | undefined>();
   let saving = $state(false);
-
-  /** Accepts German ("58,5") and English ("58.5") decimals; anything else is NaN. */
-  function parseCapacity(text: string): number {
-    const trimmed = text.trim();
-    return /^\d+([.,]\d+)?$/.test(trimmed) ? Number(trimmed.replace(',', '.')) : Number.NaN;
-  }
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     saving = true;
     error = undefined;
     try {
-      await onsubmit({ name, batteryCapacityKwh: parseCapacity(capacity) });
+      await onsubmit({ name, batteryCapacityKwh: parseDecimal(capacity) });
     } catch (e) {
       if (e instanceof ValidationError) {
         error = e.message;

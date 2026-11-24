@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import ChargingDefaultsCard from '../lib/components/ChargingDefaultsCard.svelte';
   import VehiclesCard from '../lib/components/VehiclesCard.svelte';
   import { useStore } from '../lib/store/context';
   import type { ThemePreference } from '../lib/store/store';
@@ -27,6 +28,8 @@
 <h1>Einstellungen</h1>
 
 <VehiclesCard />
+
+<ChargingDefaultsCard />
 
 <section class="card">
   <h2 id="theme-heading">Design</h2>

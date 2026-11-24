@@ -21,7 +21,7 @@
 <div class="shell">
   <main>
     {#if activeTab === 'charge'}
-      <ChargeTab />
+      <ChargeTab onopensettings={() => (activeTab = 'settings')} />
     {:else if activeTab === 'history'}
       <HistoryTab />
     {:else}
