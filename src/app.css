@@ -1,0 +1,88 @@
+/*
+ * Design tokens (Material-3-like). Each colour is light-dark(light, dark); the
+ * active scheme follows the OS unless data-theme forces light or dark.
+ */
+:root {
+  color-scheme: light dark;
+
+  --color-primary: light-dark(#006c4c, #6cdbac);
+  --color-on-primary: light-dark(#ffffff, #003826);
+  --color-primary-container: light-dark(#89f8c7, #005139);
+  --color-on-primary-container: light-dark(#002114, #89f8c7);
+  --color-secondary-container: light-dark(#cfe9d9, #334b3f);
+  --color-on-secondary-container: light-dark(#0b1f15, #cfe9d9);
+  --color-surface: light-dark(#fbfdf9, #191c1a);
+  --color-on-surface: light-dark(#191c1a, #e1e3df);
+  --color-on-surface-variant: light-dark(#404943, #c0c9c1);
+  --color-surface-container: light-dark(#eff1ed, #1d201e);
+  --color-surface-container-high: light-dark(#e9ebe7, #282b29);
+  --color-inverse-surface: light-dark(#2e312f, #e1e3df);
+  --color-inverse-on-surface: light-dark(#eff1ed, #2e312f);
+  --color-inverse-primary: light-dark(#6cdbac, #006c4c);
+  --color-outline: light-dark(#707973, #8a938c);
+  --color-outline-variant: light-dark(#c0c9c1, #404943);
+  --color-error: light-dark(#ba1a1a, #ffb4ab);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-s: 8px;
+  --radius-m: 12px;
+  --radius-l: 16px;
+  --radius-xl: 28px;
+  --radius-full: 999px;
+
+  --touch-target: 48px;
+  --nav-height: 80px;
+
+  --font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-size-body: 1rem;
+  --font-size-label: 0.875rem;
+  --font-size-title: 1.375rem;
+
+  --elevation-2: 0 2px 6px rgb(0 0 0 / 0.15), 0 1px 2px rgb(0 0 0 / 0.3);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: var(--font-size-body);
+  line-height: 1.5;
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-weight: 500;
+}
