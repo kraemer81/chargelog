@@ -4,15 +4,15 @@
   import ChargingDefaultsCard from '../lib/components/ChargingDefaultsCard.svelte';
   import VehiclesCard from '../lib/components/VehiclesCard.svelte';
   import { useStore } from '../lib/store/context';
-  import type { ThemePreference } from '../lib/store/store';
+  import { THEME_PREFERENCES, type ThemePreference } from '../lib/store/store';
 
   const store = useStore();
 
-  const themeOptions: { value: ThemePreference; label: string }[] = [
-    { value: 'system', label: 'System' },
-    { value: 'light', label: 'Hell' },
-    { value: 'dark', label: 'Dunkel' },
-  ];
+  const themeLabels: Record<ThemePreference, string> = {
+    system: 'System',
+    light: 'Hell',
+    dark: 'Dunkel',
+  };
 
   let themePreference = $state<ThemePreference | undefined>();
 
@@ -35,14 +35,14 @@
 <section class="card">
   <h2 id="theme-heading">Design</h2>
   <div class="segmented" role="radiogroup" aria-labelledby="theme-heading">
-    {#each themeOptions as option (option.value)}
+    {#each THEME_PREFERENCES as value (value)}
       <button
         type="button"
         role="radio"
-        aria-checked={themePreference === option.value}
-        onclick={() => chooseTheme(option.value)}
+        aria-checked={themePreference === value}
+        onclick={() => chooseTheme(value)}
       >
-        {option.label}
+        {themeLabels[value]}
       </button>
     {/each}
   </div>

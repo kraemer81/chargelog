@@ -1,7 +1,19 @@
 import Dexie, { liveQuery, type EntityTable, type Observable } from 'dexie';
 import { todayIsoDate } from '../format';
+import { createBackup, type Backup } from './backup';
+import {
+  chargingLossError,
+  isIsoDate,
+  noteField,
+  percentageError,
+  priceError,
+  ValidationError,
+  vehicleNameKey,
+  type ThemePreference,
+} from './rules';
 
-export type ThemePreference = 'system' | 'light' | 'dark';
+export { ValidationError, THEME_PREFERENCES, type ThemePreference } from './rules';
+export { readBackup, writeBackup, type Backup } from './backup';
 
 export interface Settings {
   themePreference: ThemePreference;
@@ -44,14 +56,6 @@ export interface Vehicle {
 export interface NewVehicle {
   name: string;
   batteryCapacityKwh: number;
-}
-
-/**
- * A rejected store operation. The message is German and meant to be shown to
- * the user as-is.
- */
-export class ValidationError extends Error {
-  override name = 'ValidationError';
 }
 
 /** What the user enters to log a charging session. */
@@ -227,230 +231,14 @@ export function checkCharge(input: ChargeInput): ChargeCheck {
   return problem ? { problems, problem } : { problems, charge: calculateCharge(input) };
 }
 
-/**
- * Why a start/end pair of a charging session can't be saved, as a German
- * message for the user, or `undefined` if it is valid.
- */
-function percentageError(startPercent: number, endPercent: number): string | undefined {
-  if (!(startPercent >= 0 && startPercent <= 100)) {
-    return 'Der Start muss zwischen 0 und 100 % liegen.';
-  }
-  if (!(endPercent >= 0 && endPercent <= 100)) {
-    return 'Das Ende muss zwischen 0 und 100 % liegen.';
-  }
-  if (endPercent <= startPercent) {
-    return 'Das Ende muss über dem Start liegen.';
-  }
-  return undefined;
-}
-
-/** Why a price per kWh can't be used, as a German message, or `undefined` if it is valid. */
-function priceError(pricePerKwh: number): string | undefined {
-  return Number.isFinite(pricePerKwh) && pricePerKwh >= 0
-    ? undefined
-    : 'Bitte gib einen Preis von mindestens 0 € ein.';
-}
-
-/** Why a charging loss can't be used, as a German message, or `undefined` if it is valid. */
-function chargingLossError(chargingLossPercent: number): string | undefined {
-  return chargingLossPercent >= 0 && chargingLossPercent < 100
-    ? undefined
-    : 'Der Ladeverlust muss zwischen 0 und 100 % liegen.';
-}
-
 /** Throws a `ValidationError` for the first of `problems` that is set. */
 function assertValid(...problems: (string | undefined)[]): void {
   const problem = problems.find((p) => p !== undefined);
   if (problem) throw new ValidationError(problem);
 }
 
-/** True for a real calendar date written as `YYYY-MM-DD`. */
-function isIsoDate(text: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
-  const date = new Date(`${text}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(text);
-}
-
-/** Vehicle names are unique regardless of case. */
-function vehicleNameKey(name: string): string {
-  return name.toLocaleLowerCase('de');
-}
-
-/** A note as stored: trimmed, and left out (`{}`) if blank. */
-function noteField(note: string | undefined): { note?: string } {
-  const trimmed = note?.trim();
-  return trimmed ? { note: trimmed } : {};
-}
-
 function roundTo2Decimals(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
-}
-
-/** Identifies a ChargeLog backup file. */
-const BACKUP_FORMAT = 'chargelog-backup';
-/** Version of the backup's structure; raised whenever it changes incompatibly. */
-const BACKUP_SCHEMA_VERSION = 1;
-
-/** Everything the store holds, as written to and read from a backup file. */
-export interface Backup {
-  format: typeof BACKUP_FORMAT;
-  schemaVersion: typeof BACKUP_SCHEMA_VERSION;
-  /** When the backup was made, ISO 8601. */
-  exportedAt: string;
-  settings: Settings;
-  vehicles: Vehicle[];
-  sessions: ChargingSession[];
-}
-
-/** The text of a backup file. */
-export function writeBackup(backup: Backup): string {
-  return JSON.stringify(backup, null, 2);
-}
-
-/**
- * Parses and checks the text of a backup file. Throws a `ValidationError`
- * with a German message if it is not a valid ChargeLog backup.
- */
-export function readBackup(text: string): Backup {
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new ValidationError('Die Datei ist keine gültige Sicherung.');
-  }
-  if (!isRecord(data) || data.format !== BACKUP_FORMAT) {
-    throw new ValidationError('Die Datei ist keine ChargeLog-Sicherung.');
-  }
-  if (typeof data.schemaVersion === 'number' && data.schemaVersion > BACKUP_SCHEMA_VERSION) {
-    throw new ValidationError(
-      'Die Sicherung stammt aus einer neueren Version von ChargeLog. Bitte aktualisiere die App.',
-    );
-  }
-  if (
-    data.schemaVersion !== BACKUP_SCHEMA_VERSION ||
-    typeof data.exportedAt !== 'string' ||
-    Number.isNaN(Date.parse(data.exportedAt))
-  ) {
-    throw corruptBackup();
-  }
-  const vehicles = backupVehicles(data.vehicles);
-  return {
-    format: BACKUP_FORMAT,
-    schemaVersion: BACKUP_SCHEMA_VERSION,
-    exportedAt: data.exportedAt,
-    settings: backupSettings(data.settings),
-    vehicles,
-    sessions: backupSessions(data.sessions, vehicles),
-  };
-}
-
-function corruptBackup(): ValidationError {
-  return new ValidationError('Die Sicherung ist beschädigt oder unvollständig.');
-}
-
-/** Throws a corrupt-backup error unless every condition holds. */
-function assertBackup(...conditions: boolean[]): void {
-  if (!conditions.every(Boolean)) throw corruptBackup();
-}
-
-const THEME_PREFERENCES: readonly unknown[] = ['system', 'light', 'dark'] satisfies ThemePreference[];
-
-function backupSettings(data: unknown): Settings {
-  assertBackup(isRecord(data));
-  const { themePreference, defaultPricePerKwh, defaultChargingLossPercent } = data as Record<
-    string,
-    unknown
-  >;
-  assertBackup(
-    THEME_PREFERENCES.includes(themePreference),
-    isNumber(defaultPricePerKwh) && !priceError(defaultPricePerKwh),
-    isNumber(defaultChargingLossPercent) && !chargingLossError(defaultChargingLossPercent),
-  );
-  return {
-    themePreference: themePreference as ThemePreference,
-    defaultPricePerKwh: defaultPricePerKwh as number,
-    defaultChargingLossPercent: defaultChargingLossPercent as number,
-  };
-}
-
-/** The backup's vehicles: unique ids and names, and exactly one default if there are any. */
-function backupVehicles(data: unknown): Vehicle[] {
-  assertBackup(Array.isArray(data));
-  const vehicles = (data as unknown[]).map((item): Vehicle => {
-    assertBackup(isRecord(item));
-    const { id, name, batteryCapacityKwh, isDefault } = item as Record<string, unknown>;
-    assertBackup(
-      isId(id),
-      typeof name === 'string' && name.trim() !== '',
-      isNumber(batteryCapacityKwh) && batteryCapacityKwh > 0,
-      typeof isDefault === 'boolean',
-    );
-    return {
-      id: id as number,
-      name: (name as string).trim(),
-      batteryCapacityKwh: batteryCapacityKwh as number,
-      isDefault: isDefault as boolean,
-    };
-  });
-  assertBackup(
-    isUnique(vehicles.map((v) => v.id)),
-    isUnique(vehicles.map((v) => vehicleNameKey(v.name))),
-    vehicles.length === 0 || vehicles.filter((v) => v.isDefault).length === 1,
-  );
-  return vehicles;
-}
-
-/** The backup's sessions: unique ids, each of one of `vehicles`. */
-function backupSessions(data: unknown, vehicles: Vehicle[]): ChargingSession[] {
-  assertBackup(Array.isArray(data));
-  const vehicleIds = new Set(vehicles.map((v) => v.id));
-  const sessions = (data as unknown[]).map((item): ChargingSession => {
-    assertBackup(isRecord(item));
-    const s = item as Record<string, unknown>;
-    const { startPercent, endPercent, pricePerKwh, chargingLossPercent } = s;
-    const { gridEnergyKwh, costEur, note } = s;
-    assertBackup(
-      isId(s.id),
-      vehicleIds.has(s.vehicleId as number),
-      typeof s.date === 'string' && isIsoDate(s.date),
-      isNumber(startPercent) && isNumber(endPercent) && !percentageError(startPercent, endPercent),
-      isNumber(pricePerKwh) && !priceError(pricePerKwh),
-      isNumber(chargingLossPercent) && !chargingLossError(chargingLossPercent),
-      isNumber(gridEnergyKwh) && gridEnergyKwh >= 0,
-      isNumber(costEur) && costEur >= 0,
-      note === undefined || typeof note === 'string',
-    );
-    return {
-      id: s.id as number,
-      vehicleId: s.vehicleId as number,
-      date: s.date as string,
-      startPercent: startPercent as number,
-      endPercent: endPercent as number,
-      ...noteField(note as string | undefined),
-      pricePerKwh: pricePerKwh as number,
-      chargingLossPercent: chargingLossPercent as number,
-      gridEnergyKwh: gridEnergyKwh as number,
-      costEur: costEur as number,
-    };
-  });
-  assertBackup(isUnique(sessions.map((session) => session.id)));
-  return sessions;
-}
-
-function isNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function isId(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) > 0;
-}
-
-function isUnique(values: unknown[]): boolean {
-  return new Set(values).size === values.length;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 interface SettingRow {
@@ -819,14 +607,13 @@ export async function openChargeLogStore(
     },
 
     async exportBackup() {
-      return db.transaction('r', db.settings, db.vehicles, db.sessions, async () => ({
-        format: BACKUP_FORMAT,
-        schemaVersion: BACKUP_SCHEMA_VERSION,
-        exportedAt: new Date().toISOString(),
-        settings: await readSettings(),
-        vehicles: await db.vehicles.toArray(),
-        sessions: await db.sessions.toArray(),
-      }));
+      return db.transaction('r', db.settings, db.vehicles, db.sessions, async () =>
+        createBackup({
+          settings: await readSettings(),
+          vehicles: await db.vehicles.toArray(),
+          sessions: await db.sessions.toArray(),
+        }),
+      );
     },
 
     async restoreBackup(backup) {
