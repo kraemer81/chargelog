@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import ChargingRatesFields from '../lib/components/ChargingRatesFields.svelte';
   import PercentRangeInput from '../lib/components/PercentRangeInput.svelte';
   import {
     formatDecimal,
@@ -15,9 +16,11 @@
   import {
     calculateCharge,
     chargingLossError,
+    defaultRates,
     percentageError,
     priceError,
     ValidationError,
+    type ChargingRates,
     type ChargingSession,
     type Settings,
     type Vehicle,
@@ -43,8 +46,10 @@
   let note = $state('');
   /** Whether price and charging loss are overridden for this session only. */
   let overriding = $state(false);
-  let priceText = $state('');
-  let lossText = $state('');
+  let rateText = $state<Record<keyof ChargingRates, string>>({
+    pricePerKwh: '',
+    chargingLossPercent: '',
+  });
   let saving = $state(false);
   let error = $state<string | undefined>();
   let confirmation = $state<string | undefined>();
@@ -74,17 +79,21 @@
   const vehicle = $derived(vehicles?.find((v) => v.id === vehicleId));
   const percentageProblem = $derived(percentageError(startPercent, endPercent));
   /** Price and charging loss this session will be saved with. */
-  const rates = $derived(
+  const rates = $derived<ChargingRates | undefined>(
     overriding
-      ? { pricePerKwh: parseDecimal(priceText), chargingLossPercent: parseDecimal(lossText) }
-      : settings && {
-          pricePerKwh: settings.defaultPricePerKwh,
-          chargingLossPercent: settings.defaultChargingLossPercent,
-        },
+      ? {
+          pricePerKwh: parseDecimal(rateText.pricePerKwh),
+          chargingLossPercent: parseDecimal(rateText.chargingLossPercent),
+        }
+      : settings && defaultRates(settings),
   );
-  const priceProblem = $derived(rates && priceError(rates.pricePerKwh));
-  const lossProblem = $derived(rates && chargingLossError(rates.chargingLossPercent));
-  const formProblem = $derived(percentageProblem ?? priceProblem ?? lossProblem);
+  const rateProblems = $derived({
+    pricePerKwh: rates && priceError(rates.pricePerKwh),
+    chargingLossPercent: rates && chargingLossError(rates.chargingLossPercent),
+  });
+  const formProblem = $derived(
+    percentageProblem ?? rateProblems.pricePerKwh ?? rateProblems.chargingLossPercent,
+  );
   const preview = $derived(
     vehicle && rates && !formProblem
       ? calculateCharge({
@@ -106,8 +115,11 @@
   /** Starts overriding, prefilled with the defaults. */
   function startOverride() {
     if (!settings) return;
-    priceText = formatEditableDecimal(settings.defaultPricePerKwh);
-    lossText = formatEditableDecimal(settings.defaultChargingLossPercent);
+    const { pricePerKwh, chargingLossPercent } = defaultRates(settings);
+    rateText = {
+      pricePerKwh: formatEditableDecimal(pricePerKwh),
+      chargingLossPercent: formatEditableDecimal(chargingLossPercent),
+    };
     overriding = true;
   }
 
@@ -123,7 +135,7 @@
         startPercent,
         endPercent,
         note,
-        ...(overriding ? rates : {}),
+        rates: overriding ? rates : undefined,
       });
       // Visibly reset the form so it is clear the entry was taken.
       date = todayIsoDate();
@@ -203,26 +215,7 @@
     {#if overriding}
       <fieldset class="rates">
         <legend>Nur für diesen Ladevorgang</legend>
-        <label class="field">
-          <span>Preis pro kWh (€)</span>
-          <input
-            bind:value={priceText}
-            inputmode="decimal"
-            autocomplete="off"
-            aria-invalid={priceProblem !== undefined}
-          />
-          {#if priceProblem}<span class="error">{priceProblem}</span>{/if}
-        </label>
-        <label class="field">
-          <span>Ladeverlust (%)</span>
-          <input
-            bind:value={lossText}
-            inputmode="decimal"
-            autocomplete="off"
-            aria-invalid={lossProblem !== undefined}
-          />
-          {#if lossProblem}<span class="error">{lossProblem}</span>{/if}
-        </label>
+        <ChargingRatesFields bind:text={rateText} errors={rateProblems} />
         <button type="button" class="text reset" onclick={() => (overriding = false)}>
           Standardwerte verwenden
         </button>
@@ -397,10 +390,6 @@
     text-align: left;
   }
 
-  .field input[aria-invalid='true'] {
-    border-color: var(--color-error);
-  }
-
   .rates-summary {
     display: flex;
     align-items: center;
@@ -425,8 +414,8 @@
   }
 
   .rates {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+    display: flex;
+    flex-direction: column;
     gap: var(--space-3);
     min-width: 0;
     margin: 0;
@@ -441,17 +430,8 @@
     color: var(--color-on-surface-variant);
   }
 
-  .rates .field {
-    min-width: 0;
-  }
-
-  .rates .field input {
-    min-width: 0;
-  }
-
   .rates .reset {
-    grid-column: 1 / -1;
-    justify-self: start;
+    align-self: flex-start;
   }
 
   .field input:focus,

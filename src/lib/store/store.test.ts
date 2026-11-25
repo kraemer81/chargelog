@@ -4,6 +4,7 @@ import {
   calculateCharge,
   openChargeLogStore,
   type ChargeLogStore,
+  type ChargingRates,
   type ChargingSession,
 } from './store';
 
@@ -242,8 +243,7 @@ describe('charging sessions', () => {
       date: '2026-11-24',
       startPercent: 20,
       endPercent: 80,
-      pricePerKwh: 0.59,
-      chargingLossPercent: 15,
+      rates: { pricePerKwh: 0.59, chargingLossPercent: 15 },
     });
 
     expect(session).toMatchObject({
@@ -261,13 +261,13 @@ describe('charging sessions', () => {
   it('uses the defaults again for the session after an overridden one', async () => {
     const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
     await store.updateSettings({ defaultPricePerKwh: 0.32, defaultChargingLossPercent: 10 });
-    const log = (overrides = {}) =>
+    const log = (rates?: ChargingRates) =>
       store.addSession({
         vehicleId: id3.id,
         date: '2026-11-24',
         startPercent: 20,
         endPercent: 80,
-        ...overrides,
+        rates,
       });
 
     await log({ pricePerKwh: 0.59, chargingLossPercent: 15 });
@@ -277,24 +277,27 @@ describe('charging sessions', () => {
   });
 
   it.each([
-    [{ pricePerKwh: -0.1 }, 'Bitte gib einen Preis von mindestens 0 € ein.'],
-    [{ pricePerKwh: Number.NaN }, 'Bitte gib einen Preis von mindestens 0 € ein.'],
-    [{ chargingLossPercent: 100 }, 'Der Ladeverlust muss zwischen 0 und 100 % liegen.'],
-    [{ chargingLossPercent: Number.NaN }, 'Der Ladeverlust muss zwischen 0 und 100 % liegen.'],
-  ])('rejects the override %o', async (override, message) => {
-    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    [-0.1, 10, 'Bitte gib einen Preis von mindestens 0 € ein.'],
+    [Number.NaN, 10, 'Bitte gib einen Preis von mindestens 0 € ein.'],
+    [0.3, 100, 'Der Ladeverlust muss zwischen 0 und 100 % liegen.'],
+    [0.3, Number.NaN, 'Der Ladeverlust muss zwischen 0 und 100 % liegen.'],
+  ])(
+    'rejects an override of %s €/kWh and %s %% loss',
+    async (pricePerKwh, chargingLossPercent, message) => {
+      const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
 
-    await expect(
-      store.addSession({
-        vehicleId: id3.id,
-        date: '2026-11-24',
-        startPercent: 20,
-        endPercent: 80,
-        ...override,
-      }),
-    ).rejects.toThrow(message);
-    expect(await store.countSessions(id3.id)).toBe(0);
-  });
+      await expect(
+        store.addSession({
+          vehicleId: id3.id,
+          date: '2026-11-24',
+          startPercent: 20,
+          endPercent: 80,
+          rates: { pricePerKwh, chargingLossPercent },
+        }),
+      ).rejects.toThrow(message);
+      expect(await store.countSessions(id3.id)).toBe(0);
+    },
+  );
 
   it('saves exactly the grid energy and cost the preview shows', async () => {
     const vehicle = await store.addVehicle({ name: 'EV6', batteryCapacityKwh: 77 });

@@ -10,6 +10,22 @@ export interface Settings {
   defaultChargingLossPercent: number;
 }
 
+/** Price and charging loss that together turn charged energy into grid energy and cost. */
+export interface ChargingRates {
+  /** Electricity price in € per kWh. */
+  pricePerKwh: number;
+  /** Share of grid energy lost while charging, in %. */
+  chargingLossPercent: number;
+}
+
+/** The rates a new charging session gets unless they are overridden. */
+export function defaultRates(settings: Settings): ChargingRates {
+  return {
+    pricePerKwh: settings.defaultPricePerKwh,
+    chargingLossPercent: settings.defaultChargingLossPercent,
+  };
+}
+
 const DEFAULT_SETTINGS: Settings = {
   themePreference: 'system',
   defaultPricePerKwh: 0.3,
@@ -47,32 +63,26 @@ export interface NewChargingSession {
   /** State of charge after charging, greater than `startPercent`, at most 100. */
   endPercent: number;
   note?: string;
-  /** Overrides the default price in € per kWh for this session only. */
-  pricePerKwh?: number;
-  /** Overrides the default charging loss in % for this session only. */
-  chargingLossPercent?: number;
+  /** Overrides the default rates for this session only. */
+  rates?: ChargingRates;
 }
 
 /**
  * A logged charging session. Price and charging loss are snapshots taken when
  * it was saved, so later changes to the defaults never alter it.
  */
-export interface ChargingSession extends NewChargingSession {
+export interface ChargingSession extends Omit<NewChargingSession, 'rates'>, ChargingRates {
   id: number;
-  pricePerKwh: number;
-  chargingLossPercent: number;
   /** Energy drawn from the grid, losses included, rounded to 2 decimals. */
   gridEnergyKwh: number;
   /** `gridEnergyKwh` × `pricePerKwh`, rounded to 2 decimals. */
   costEur: number;
 }
 
-export interface ChargeInput {
+export interface ChargeInput extends ChargingRates {
   batteryCapacityKwh: number;
   startPercent: number;
   endPercent: number;
-  chargingLossPercent: number;
-  pricePerKwh: number;
 }
 
 /**
@@ -303,10 +313,8 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     async addSession(session) {
       assertValid(
         percentageError(session.startPercent, session.endPercent),
-        session.pricePerKwh === undefined ? undefined : priceError(session.pricePerKwh),
-        session.chargingLossPercent === undefined
-          ? undefined
-          : chargingLossError(session.chargingLossPercent),
+        session.rates && priceError(session.rates.pricePerKwh),
+        session.rates && chargingLossError(session.rates.chargingLossPercent),
       );
       if (!isIsoDate(session.date)) {
         throw new ValidationError('Bitte gib ein gültiges Datum ein.');
@@ -317,24 +325,19 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
         if (!vehicle) {
           throw new ValidationError('Bitte wähle ein Fahrzeug aus.');
         }
-        const settings = await readSettings();
-        const pricePerKwh = session.pricePerKwh ?? settings.defaultPricePerKwh;
-        const chargingLossPercent =
-          session.chargingLossPercent ?? settings.defaultChargingLossPercent;
+        const rates = session.rates ?? defaultRates(await readSettings());
         const row = {
           vehicleId: session.vehicleId,
           date: session.date,
           startPercent: session.startPercent,
           endPercent: session.endPercent,
           ...(note ? { note } : {}),
-          pricePerKwh,
-          chargingLossPercent,
+          ...rates,
           ...calculateCharge({
             batteryCapacityKwh: vehicle.batteryCapacityKwh,
             startPercent: session.startPercent,
             endPercent: session.endPercent,
-            chargingLossPercent,
-            pricePerKwh,
+            ...rates,
           }),
         };
         const id = await db.sessions.add(row as ChargingSession);
