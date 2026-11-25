@@ -1,9 +1,17 @@
 /** German number and date formatting, and parsing of numbers the user types. */
 
 const decimal = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 2 });
+const exact = new Intl.NumberFormat('de-DE', {
+  maximumSignificantDigits: 15,
+  useGrouping: false,
+});
 const fixed2 = new Intl.NumberFormat('de-DE', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
+});
+const price = new Intl.NumberFormat('de-DE', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
 });
 const euro = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
 const shortDate = new Intl.DateTimeFormat('de-DE', {
@@ -18,9 +26,19 @@ export function formatDecimal(value: number): string {
   return decimal.format(value);
 }
 
+/** "0,3249" — every decimal kept (up to float precision), no grouping, so `parseDecimal` reads back the same value. */
+export function formatEditableDecimal(value: number): string {
+  return exact.format(value);
+}
+
 /** "38,28 kWh" */
 export function formatKwh(value: number): string {
   return `${fixed2.format(value)} kWh`;
+}
+
+/** "0,32 €/kWh" — at least 2 decimals, up to 4 for exact tariffs. */
+export function formatPricePerKwh(value: number): string {
+  return `${price.format(value)} €/kWh`;
 }
 
 /** "12,25 €" */

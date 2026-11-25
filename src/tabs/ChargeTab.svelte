@@ -1,11 +1,22 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import PercentRangeInput from '../lib/components/PercentRangeInput.svelte';
-  import { formatEuro, formatIsoDate, formatKwh, todayIsoDate } from '../lib/format';
+  import {
+    formatDecimal,
+    formatEditableDecimal,
+    formatEuro,
+    formatIsoDate,
+    formatKwh,
+    formatPricePerKwh,
+    parseDecimal,
+    todayIsoDate,
+  } from '../lib/format';
   import { useStore } from '../lib/store/context';
   import {
     calculateCharge,
+    chargingLossError,
     percentageError,
+    priceError,
     ValidationError,
     type ChargingSession,
     type Settings,
@@ -30,6 +41,10 @@
   let startPercent = $state(SUGGESTED.startPercent);
   let endPercent = $state(SUGGESTED.endPercent);
   let note = $state('');
+  /** Whether price and charging loss are overridden for this session only. */
+  let overriding = $state(false);
+  let priceText = $state('');
+  let lossText = $state('');
   let saving = $state(false);
   let error = $state<string | undefined>();
   let confirmation = $state<string | undefined>();
@@ -58,14 +73,25 @@
 
   const vehicle = $derived(vehicles?.find((v) => v.id === vehicleId));
   const percentageProblem = $derived(percentageError(startPercent, endPercent));
+  /** Price and charging loss this session will be saved with. */
+  const rates = $derived(
+    overriding
+      ? { pricePerKwh: parseDecimal(priceText), chargingLossPercent: parseDecimal(lossText) }
+      : settings && {
+          pricePerKwh: settings.defaultPricePerKwh,
+          chargingLossPercent: settings.defaultChargingLossPercent,
+        },
+  );
+  const priceProblem = $derived(rates && priceError(rates.pricePerKwh));
+  const lossProblem = $derived(rates && chargingLossError(rates.chargingLossPercent));
+  const formProblem = $derived(percentageProblem ?? priceProblem ?? lossProblem);
   const preview = $derived(
-    vehicle && settings && !percentageProblem
+    vehicle && rates && !formProblem
       ? calculateCharge({
           batteryCapacityKwh: vehicle.batteryCapacityKwh,
           startPercent,
           endPercent,
-          chargingLossPercent: settings.defaultChargingLossPercent,
-          pricePerKwh: settings.defaultPricePerKwh,
+          ...rates,
         })
       : undefined,
   );
@@ -77,17 +103,33 @@
     ({ startPercent, endPercent } = SUGGESTED);
   }
 
+  /** Starts overriding, prefilled with the defaults. */
+  function startOverride() {
+    if (!settings) return;
+    priceText = formatEditableDecimal(settings.defaultPricePerKwh);
+    lossText = formatEditableDecimal(settings.defaultChargingLossPercent);
+    overriding = true;
+  }
+
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (vehicleId === undefined || percentageProblem) return;
+    if (vehicleId === undefined || formProblem) return;
     saving = true;
     error = undefined;
     try {
-      const saved = await store.addSession({ vehicleId, date, startPercent, endPercent, note });
+      const saved = await store.addSession({
+        vehicleId,
+        date,
+        startPercent,
+        endPercent,
+        note,
+        ...(overriding ? rates : {}),
+      });
       // Visibly reset the form so it is clear the entry was taken.
       date = todayIsoDate();
       ({ startPercent, endPercent } = SUGGESTED);
       note = '';
+      overriding = false;
       showConfirmation('Ladevorgang gespeichert');
       highlight(saved.id);
     } catch (e) {
@@ -158,6 +200,52 @@
 
     <PercentRangeInput bind:start={startPercent} bind:end={endPercent} />
 
+    {#if overriding}
+      <fieldset class="rates">
+        <legend>Nur für diesen Ladevorgang</legend>
+        <label class="field">
+          <span>Preis pro kWh (€)</span>
+          <input
+            bind:value={priceText}
+            inputmode="decimal"
+            autocomplete="off"
+            aria-invalid={priceProblem !== undefined}
+          />
+          {#if priceProblem}<span class="error">{priceProblem}</span>{/if}
+        </label>
+        <label class="field">
+          <span>Ladeverlust (%)</span>
+          <input
+            bind:value={lossText}
+            inputmode="decimal"
+            autocomplete="off"
+            aria-invalid={lossProblem !== undefined}
+          />
+          {#if lossProblem}<span class="error">{lossProblem}</span>{/if}
+        </label>
+        <button type="button" class="text reset" onclick={() => (overriding = false)}>
+          Standardwerte verwenden
+        </button>
+      </fieldset>
+    {:else if settings}
+      <button
+        type="button"
+        class="rates-summary"
+        aria-label="Preis und Ladeverlust für diesen Ladevorgang ändern"
+        onclick={startOverride}
+      >
+        {formatPricePerKwh(settings.defaultPricePerKwh)} · {formatDecimal(
+          settings.defaultChargingLossPercent,
+        )} % Verlust
+        <!-- Material Icons "edit" (Apache License 2.0). -->
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"
+          />
+        </svg>
+      </button>
+    {/if}
+
     <div class="preview" aria-live="polite">
       {#if preview}
         <div>
@@ -182,7 +270,7 @@
       <p class="error" role="alert">{error}</p>
     {/if}
 
-    <button type="submit" class="filled" disabled={saving || percentageProblem !== undefined}>
+    <button type="submit" class="filled" disabled={saving || formProblem !== undefined}>
       Speichern
     </button>
   </form>
@@ -307,6 +395,63 @@
   /* iOS Safari centres the date value by default. */
   .field input[type='date']::-webkit-date-and-time-value {
     text-align: left;
+  }
+
+  .field input[aria-invalid='true'] {
+    border-color: var(--color-error);
+  }
+
+  .rates-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    align-self: flex-start;
+    min-height: var(--touch-target);
+    margin: calc(-1 * var(--space-2)) 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--color-on-surface-variant);
+    font: inherit;
+    font-size: var(--font-size-label);
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+
+  .rates-summary svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
+  }
+
+  .rates {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    min-width: 0;
+    margin: 0;
+    padding: var(--space-3);
+    border: 1px solid var(--color-outline-variant);
+    border-radius: var(--radius-m);
+  }
+
+  .rates legend {
+    padding: 0 var(--space-1);
+    font-size: var(--font-size-label);
+    color: var(--color-on-surface-variant);
+  }
+
+  .rates .field {
+    min-width: 0;
+  }
+
+  .rates .field input {
+    min-width: 0;
+  }
+
+  .rates .reset {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
 
   .field input:focus,

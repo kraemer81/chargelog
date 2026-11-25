@@ -47,6 +47,10 @@ export interface NewChargingSession {
   /** State of charge after charging, greater than `startPercent`, at most 100. */
   endPercent: number;
   note?: string;
+  /** Overrides the default price in € per kWh for this session only. */
+  pricePerKwh?: number;
+  /** Overrides the default charging loss in % for this session only. */
+  chargingLossPercent?: number;
 }
 
 /**
@@ -97,6 +101,26 @@ export function percentageError(startPercent: number, endPercent: number): strin
     return 'Das Ende muss über dem Start liegen.';
   }
   return undefined;
+}
+
+/** Why a price per kWh can't be used, as a German message, or `undefined` if it is valid. */
+export function priceError(pricePerKwh: number): string | undefined {
+  return Number.isFinite(pricePerKwh) && pricePerKwh >= 0
+    ? undefined
+    : 'Bitte gib einen Preis von mindestens 0 € ein.';
+}
+
+/** Why a charging loss can't be used, as a German message, or `undefined` if it is valid. */
+export function chargingLossError(chargingLossPercent: number): string | undefined {
+  return chargingLossPercent >= 0 && chargingLossPercent < 100
+    ? undefined
+    : 'Der Ladeverlust muss zwischen 0 und 100 % liegen.';
+}
+
+/** Throws a `ValidationError` for the first of `problems` that is set. */
+function assertValid(...problems: (string | undefined)[]): void {
+  const problem = problems.find((p) => p !== undefined);
+  if (problem) throw new ValidationError(problem);
 }
 
 /** True for a real calendar date written as `YYYY-MM-DD`. */
@@ -156,7 +180,8 @@ export interface ChargeLogStore {
   deleteVehicle(id: number): Promise<void>;
   /**
    * Logs a charging session with a snapshot of the current default price and
-   * charging loss, and the grid energy and cost calculated from them.
+   * charging loss (unless overridden for this session), and the grid energy
+   * and cost calculated from them. The defaults themselves are not changed.
    */
   addSession(session: NewChargingSession): Promise<ChargingSession>;
   /**
@@ -201,12 +226,10 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
 
   function validateSettings(changes: Partial<Settings>): void {
     const { defaultPricePerKwh: price, defaultChargingLossPercent: loss } = changes;
-    if (price !== undefined && !(Number.isFinite(price) && price >= 0)) {
-      throw new ValidationError('Bitte gib einen Preis von mindestens 0 € ein.');
-    }
-    if (loss !== undefined && !(loss >= 0 && loss < 100)) {
-      throw new ValidationError('Der Ladeverlust muss zwischen 0 und 100 % liegen.');
-    }
+    assertValid(
+      price === undefined ? undefined : priceError(price),
+      loss === undefined ? undefined : chargingLossError(loss),
+    );
   }
 
   async function readSettings(): Promise<Settings> {
@@ -278,8 +301,13 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     },
 
     async addSession(session) {
-      const problem = percentageError(session.startPercent, session.endPercent);
-      if (problem) throw new ValidationError(problem);
+      assertValid(
+        percentageError(session.startPercent, session.endPercent),
+        session.pricePerKwh === undefined ? undefined : priceError(session.pricePerKwh),
+        session.chargingLossPercent === undefined
+          ? undefined
+          : chargingLossError(session.chargingLossPercent),
+      );
       if (!isIsoDate(session.date)) {
         throw new ValidationError('Bitte gib ein gültiges Datum ein.');
       }
@@ -290,8 +318,9 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
           throw new ValidationError('Bitte wähle ein Fahrzeug aus.');
         }
         const settings = await readSettings();
-        const pricePerKwh = settings.defaultPricePerKwh;
-        const chargingLossPercent = settings.defaultChargingLossPercent;
+        const pricePerKwh = session.pricePerKwh ?? settings.defaultPricePerKwh;
+        const chargingLossPercent =
+          session.chargingLossPercent ?? settings.defaultChargingLossPercent;
         const row = {
           vehicleId: session.vehicleId,
           date: session.date,

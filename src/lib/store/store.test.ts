@@ -233,6 +233,69 @@ describe('charging sessions', () => {
     });
   });
 
+  it('saves an overridden price and charging loss without changing the defaults', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await store.updateSettings({ defaultPricePerKwh: 0.32, defaultChargingLossPercent: 10 });
+
+    const session = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 20,
+      endPercent: 80,
+      pricePerKwh: 0.59,
+      chargingLossPercent: 15,
+    });
+
+    expect(session).toMatchObject({
+      pricePerKwh: 0.59,
+      chargingLossPercent: 15,
+      gridEnergyKwh: 40.02,
+      costEur: 23.61,
+    });
+    expect(await store.getSettings()).toMatchObject({
+      defaultPricePerKwh: 0.32,
+      defaultChargingLossPercent: 10,
+    });
+  });
+
+  it('uses the defaults again for the session after an overridden one', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await store.updateSettings({ defaultPricePerKwh: 0.32, defaultChargingLossPercent: 10 });
+    const log = (overrides = {}) =>
+      store.addSession({
+        vehicleId: id3.id,
+        date: '2026-11-24',
+        startPercent: 20,
+        endPercent: 80,
+        ...overrides,
+      });
+
+    await log({ pricePerKwh: 0.59, chargingLossPercent: 15 });
+    const next = await log();
+
+    expect(next).toMatchObject({ pricePerKwh: 0.32, chargingLossPercent: 10, costEur: 12.25 });
+  });
+
+  it.each([
+    [{ pricePerKwh: -0.1 }, 'Bitte gib einen Preis von mindestens 0 € ein.'],
+    [{ pricePerKwh: Number.NaN }, 'Bitte gib einen Preis von mindestens 0 € ein.'],
+    [{ chargingLossPercent: 100 }, 'Der Ladeverlust muss zwischen 0 und 100 % liegen.'],
+    [{ chargingLossPercent: Number.NaN }, 'Der Ladeverlust muss zwischen 0 und 100 % liegen.'],
+  ])('rejects the override %o', async (override, message) => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+
+    await expect(
+      store.addSession({
+        vehicleId: id3.id,
+        date: '2026-11-24',
+        startPercent: 20,
+        endPercent: 80,
+        ...override,
+      }),
+    ).rejects.toThrow(message);
+    expect(await store.countSessions(id3.id)).toBe(0);
+  });
+
   it('saves exactly the grid energy and cost the preview shows', async () => {
     const vehicle = await store.addVehicle({ name: 'EV6', batteryCapacityKwh: 77 });
     await store.updateSettings({ defaultPricePerKwh: 0.35, defaultChargingLossPercent: 12 });
