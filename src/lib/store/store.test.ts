@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   calculateCharge,
   openChargeLogStore,
+  readBackup,
+  writeBackup,
   type ChargeLogStore,
   type ChargingRates,
   type ChargingSession,
@@ -833,6 +835,115 @@ describe('editing and deleting sessions', () => {
   });
 });
 
+describe('backup', () => {
+  it('restores identical data after export, delete all and import', async () => {
+    await store.updateSettings({ themePreference: 'dark', defaultPricePerKwh: 0.32 });
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const outlander = await store.addVehicle({ name: 'Outlander', batteryCapacityKwh: 20 });
+    await store.setDefaultVehicle(outlander.id);
+    await store.addSession({ vehicleId: id3.id, date: '2026-11-01', startPercent: 20, endPercent: 80, note: 'Wallbox' });
+    await store.addSession({
+      vehicleId: outlander.id,
+      date: '2026-11-02',
+      startPercent: 10,
+      endPercent: 100,
+      rates: { pricePerKwh: 0.25, chargingLossPercent: 12 },
+    });
+    const before = await snapshot();
+
+    const file = writeBackup(await store.exportBackup());
+    await store.deleteAllData();
+    await store.restoreBackup(readBackup(file));
+
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it('keeps logging sessions after a restore', async () => {
+    const vehicle = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await store.addSession({ vehicleId: vehicle.id, date: '2026-11-01', startPercent: 20, endPercent: 80 });
+    const file = writeBackup(await store.exportBackup());
+
+    await restore(file);
+    await store.addSession({ vehicleId: vehicle.id, date: '2026-11-02', startPercent: 30, endPercent: 90 });
+
+    expect((await store.getHistory({})).totals.sessionCount).toBe(2);
+  });
+
+  it.each([
+    ['text that is not JSON', 'kein json', 'Die Datei ist keine gültige Sicherung.'],
+    ['JSON of another kind', '{"foo": 1}', 'Die Datei ist keine ChargeLog-Sicherung.'],
+    ['JSON that is no object', '[1, 2]', 'Die Datei ist keine ChargeLog-Sicherung.'],
+    [
+      'a backup of a newer app version',
+      '{"format": "chargelog-backup", "schemaVersion": 2}',
+      'Die Sicherung stammt aus einer neueren Version von ChargeLog. Bitte aktualisiere die App.',
+    ],
+  ])('rejects %s and keeps the existing data', async (_, text, message) => {
+    await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const before = await snapshot();
+
+    await expect(restore(text)).rejects.toThrow(message);
+    expect(await snapshot()).toEqual(before);
+  });
+
+  type BackupData = Record<string, any>;
+  it.each<[string, (backup: BackupData) => void]>([
+    ['no schema version', (b) => delete b.schemaVersion],
+    ['an invalid export time', (b) => (b.exportedAt = 'gestern')],
+    ['no vehicle list', (b) => delete b.vehicles],
+    ['no session list', (b) => (b.sessions = 'none')],
+    ['no settings', (b) => delete b.settings],
+    ['an unknown theme', (b) => (b.settings.themePreference = 'pink')],
+    ['a negative default price', (b) => (b.settings.defaultPricePerKwh = -1)],
+    ['a vehicle without a name', (b) => (b.vehicles[0].name = ' ')],
+    ['a vehicle without capacity', (b) => (b.vehicles[0].batteryCapacityKwh = 0)],
+    ['a vehicle without id', (b) => delete b.vehicles[0].id],
+    ['two vehicles with the same id', (b) => (b.vehicles[1].id = b.vehicles[0].id)],
+    ['two vehicles with the same name', (b) => (b.vehicles[1].name = b.vehicles[0].name)],
+    ['two default vehicles', (b) => b.vehicles.forEach((v: BackupData) => (v.isDefault = true))],
+    ['no default vehicle', (b) => b.vehicles.forEach((v: BackupData) => (v.isDefault = false))],
+    ['a session of an unknown vehicle', (b) => (b.sessions[0].vehicleId = 999)],
+    ['a session with an invalid date', (b) => (b.sessions[0].date = '2026-02-30')],
+    ['a session ending below its start', (b) => (b.sessions[0].endPercent = 10)],
+    ['a session with an invalid charging loss', (b) => (b.sessions[0].chargingLossPercent = 100)],
+    ['a session with negative cost', (b) => (b.sessions[0].costEur = -1)],
+    ['a session without grid energy', (b) => delete b.sessions[0].gridEnergyKwh],
+    ['a session with a non-text note', (b) => (b.sessions[0].note = 5)],
+    ['two sessions with the same id', (b) => (b.sessions[1].id = b.sessions[0].id)],
+  ])('rejects a backup with %s and keeps the existing data', async (_, corrupt) => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await store.addVehicle({ name: 'Outlander', batteryCapacityKwh: 20 });
+    await store.addSession({ vehicleId: id3.id, date: '2026-11-01', startPercent: 20, endPercent: 80 });
+    await store.addSession({ vehicleId: id3.id, date: '2026-11-02', startPercent: 30, endPercent: 90 });
+    const backup = JSON.parse(writeBackup(await store.exportBackup())) as BackupData;
+    corrupt(backup);
+    const before = await snapshot();
+
+    await expect(restore(JSON.stringify(backup))).rejects.toThrow(
+      'Die Sicherung ist beschädigt oder unvollständig.',
+    );
+    expect(await snapshot()).toEqual(before);
+  });
+});
+
+describe('deleting all data', () => {
+  it('removes vehicles and sessions and resets the settings to their defaults', async () => {
+    await store.updateSettings({ themePreference: 'dark', defaultPricePerKwh: 0.32 });
+    const vehicle = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await store.addSession({ vehicleId: vehicle.id, date: '2026-11-01', startPercent: 20, endPercent: 80 });
+
+    await store.deleteAllData();
+
+    expect(await store.listVehicles()).toEqual([]);
+    expect((await store.getHistory({})).sessions).toEqual([]);
+    expect(await store.getSettings()).toEqual({
+      themePreference: 'system',
+      defaultPricePerKwh: 0.3,
+      defaultChargingLossPercent: 10,
+    });
+  });
+});
+
 describe('read problems', () => {
   it('reports a read that fails, naming what could not be read', async () => {
     const problems: ReadProblem[] = [];
@@ -901,4 +1012,18 @@ async function recentSessions(limit = 10) {
 async function defaultVehicleNames(): Promise<string[]> {
   const vehicles = await store.listVehicles();
   return vehicles.filter((vehicle) => vehicle.isDefault).map((vehicle) => vehicle.name);
+}
+
+/** Everything the store holds, for comparing before and after. */
+async function snapshot() {
+  return {
+    settings: await store.getSettings(),
+    vehicles: await store.listVehicles(),
+    history: await store.getHistory({}),
+  };
+}
+
+/** Reads and restores a backup file's text, like the import in the settings does. */
+async function restore(text: string) {
+  await store.restoreBackup(readBackup(text));
 }

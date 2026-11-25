@@ -271,13 +271,195 @@ function isIsoDate(text: string): boolean {
   return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(text);
 }
 
+/** Vehicle names are unique regardless of case. */
+function vehicleNameKey(name: string): string {
+  return name.toLocaleLowerCase('de');
+}
+
+/** A note as stored: trimmed, and left out (`{}`) if blank. */
+function noteField(note: string | undefined): { note?: string } {
+  const trimmed = note?.trim();
+  return trimmed ? { note: trimmed } : {};
+}
+
 function roundTo2Decimals(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/** Identifies a ChargeLog backup file. */
+const BACKUP_FORMAT = 'chargelog-backup';
+/** Version of the backup's structure; raised whenever it changes incompatibly. */
+const BACKUP_SCHEMA_VERSION = 1;
+
+/** Everything the store holds, as written to and read from a backup file. */
+export interface Backup {
+  format: typeof BACKUP_FORMAT;
+  schemaVersion: typeof BACKUP_SCHEMA_VERSION;
+  /** When the backup was made, ISO 8601. */
+  exportedAt: string;
+  settings: Settings;
+  vehicles: Vehicle[];
+  sessions: ChargingSession[];
+}
+
+/** The text of a backup file. */
+export function writeBackup(backup: Backup): string {
+  return JSON.stringify(backup, null, 2);
+}
+
+/**
+ * Parses and checks the text of a backup file. Throws a `ValidationError`
+ * with a German message if it is not a valid ChargeLog backup.
+ */
+export function readBackup(text: string): Backup {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new ValidationError('Die Datei ist keine gültige Sicherung.');
+  }
+  if (!isRecord(data) || data.format !== BACKUP_FORMAT) {
+    throw new ValidationError('Die Datei ist keine ChargeLog-Sicherung.');
+  }
+  if (typeof data.schemaVersion === 'number' && data.schemaVersion > BACKUP_SCHEMA_VERSION) {
+    throw new ValidationError(
+      'Die Sicherung stammt aus einer neueren Version von ChargeLog. Bitte aktualisiere die App.',
+    );
+  }
+  if (
+    data.schemaVersion !== BACKUP_SCHEMA_VERSION ||
+    typeof data.exportedAt !== 'string' ||
+    Number.isNaN(Date.parse(data.exportedAt))
+  ) {
+    throw corruptBackup();
+  }
+  const vehicles = backupVehicles(data.vehicles);
+  return {
+    format: BACKUP_FORMAT,
+    schemaVersion: BACKUP_SCHEMA_VERSION,
+    exportedAt: data.exportedAt,
+    settings: backupSettings(data.settings),
+    vehicles,
+    sessions: backupSessions(data.sessions, vehicles),
+  };
+}
+
+function corruptBackup(): ValidationError {
+  return new ValidationError('Die Sicherung ist beschädigt oder unvollständig.');
+}
+
+/** Throws a corrupt-backup error unless every condition holds. */
+function assertBackup(...conditions: boolean[]): void {
+  if (!conditions.every(Boolean)) throw corruptBackup();
+}
+
+const THEME_PREFERENCES: readonly unknown[] = ['system', 'light', 'dark'] satisfies ThemePreference[];
+
+function backupSettings(data: unknown): Settings {
+  assertBackup(isRecord(data));
+  const { themePreference, defaultPricePerKwh, defaultChargingLossPercent } = data as Record<
+    string,
+    unknown
+  >;
+  assertBackup(
+    THEME_PREFERENCES.includes(themePreference),
+    isNumber(defaultPricePerKwh) && !priceError(defaultPricePerKwh),
+    isNumber(defaultChargingLossPercent) && !chargingLossError(defaultChargingLossPercent),
+  );
+  return {
+    themePreference: themePreference as ThemePreference,
+    defaultPricePerKwh: defaultPricePerKwh as number,
+    defaultChargingLossPercent: defaultChargingLossPercent as number,
+  };
+}
+
+/** The backup's vehicles: unique ids and names, and exactly one default if there are any. */
+function backupVehicles(data: unknown): Vehicle[] {
+  assertBackup(Array.isArray(data));
+  const vehicles = (data as unknown[]).map((item): Vehicle => {
+    assertBackup(isRecord(item));
+    const { id, name, batteryCapacityKwh, isDefault } = item as Record<string, unknown>;
+    assertBackup(
+      isId(id),
+      typeof name === 'string' && name.trim() !== '',
+      isNumber(batteryCapacityKwh) && batteryCapacityKwh > 0,
+      typeof isDefault === 'boolean',
+    );
+    return {
+      id: id as number,
+      name: (name as string).trim(),
+      batteryCapacityKwh: batteryCapacityKwh as number,
+      isDefault: isDefault as boolean,
+    };
+  });
+  assertBackup(
+    isUnique(vehicles.map((v) => v.id)),
+    isUnique(vehicles.map((v) => vehicleNameKey(v.name))),
+    vehicles.length === 0 || vehicles.filter((v) => v.isDefault).length === 1,
+  );
+  return vehicles;
+}
+
+/** The backup's sessions: unique ids, each of one of `vehicles`. */
+function backupSessions(data: unknown, vehicles: Vehicle[]): ChargingSession[] {
+  assertBackup(Array.isArray(data));
+  const vehicleIds = new Set(vehicles.map((v) => v.id));
+  const sessions = (data as unknown[]).map((item): ChargingSession => {
+    assertBackup(isRecord(item));
+    const s = item as Record<string, unknown>;
+    const { startPercent, endPercent, pricePerKwh, chargingLossPercent } = s;
+    const { gridEnergyKwh, costEur, note } = s;
+    assertBackup(
+      isId(s.id),
+      vehicleIds.has(s.vehicleId as number),
+      typeof s.date === 'string' && isIsoDate(s.date),
+      isNumber(startPercent) && isNumber(endPercent) && !percentageError(startPercent, endPercent),
+      isNumber(pricePerKwh) && !priceError(pricePerKwh),
+      isNumber(chargingLossPercent) && !chargingLossError(chargingLossPercent),
+      isNumber(gridEnergyKwh) && gridEnergyKwh >= 0,
+      isNumber(costEur) && costEur >= 0,
+      note === undefined || typeof note === 'string',
+    );
+    return {
+      id: s.id as number,
+      vehicleId: s.vehicleId as number,
+      date: s.date as string,
+      startPercent: startPercent as number,
+      endPercent: endPercent as number,
+      ...noteField(note as string | undefined),
+      pricePerKwh: pricePerKwh as number,
+      chargingLossPercent: chargingLossPercent as number,
+      gridEnergyKwh: gridEnergyKwh as number,
+      costEur: costEur as number,
+    };
+  });
+  assertBackup(isUnique(sessions.map((session) => session.id)));
+  return sessions;
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isId(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
+function isUnique(values: unknown[]): boolean {
+  return new Set(values).size === values.length;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 interface SettingRow {
   key: keyof Settings;
   value: Settings[keyof Settings];
+}
+
+function settingRows(settings: Partial<Settings>): SettingRow[] {
+  return Object.entries(settings).map(([key, value]) => ({ key, value }) as SettingRow);
 }
 
 class ChargeLogDb extends Dexie {
@@ -371,6 +553,12 @@ export interface ChargeLogStore {
   watchHistory(filter: SessionFilter): Observable<History>;
   /** Number of charging sessions logged for this vehicle. */
   countSessions(vehicleId: number): Promise<number>;
+  /** A backup of all settings, vehicles and charging sessions. */
+  exportBackup(): Promise<Backup>;
+  /** Replaces all data with the backup's, in a single transaction. */
+  restoreBackup(backup: Backup): Promise<void>;
+  /** Deletes all vehicles and charging sessions and resets the settings to their defaults. */
+  deleteAllData(): Promise<void>;
   /** Calls `listener` for every watched read that fails or hangs; returns an unsubscribe function. */
   onReadProblem(listener: (problem: ReadProblem) => void): () => void;
   close(): void;
@@ -423,9 +611,9 @@ export async function openChargeLogStore(
 
   /** Rejects `name` if another vehicle (other than `ownId`) already uses it. */
   async function assertNameAvailable(name: string, ownId?: number): Promise<void> {
-    const key = name.toLocaleLowerCase('de');
+    const key = vehicleNameKey(name);
     const clash = await db.vehicles
-      .filter((v) => v.id !== ownId && v.name.toLocaleLowerCase('de') === key)
+      .filter((v) => v.id !== ownId && vehicleNameKey(v.name) === key)
       .first();
     if (clash) {
       throw new ValidationError(`Es gibt bereits ein Fahrzeug mit dem Namen „${clash.name}“.`);
@@ -454,13 +642,12 @@ export async function openChargeLogStore(
       ...rates,
     });
     if (!charge) throw new ValidationError(problem);
-    const note = values.note?.trim();
     return {
       vehicleId: values.vehicleId,
       date: values.date,
       startPercent: values.startPercent,
       endPercent: values.endPercent,
-      ...(note ? { note } : {}),
+      ...noteField(values.note),
       ...rates,
       ...charge,
     };
@@ -472,6 +659,10 @@ export async function openChargeLogStore(
       price === undefined ? undefined : priceError(price),
       loss === undefined ? undefined : chargingLossError(loss),
     );
+  }
+
+  async function clearAll(): Promise<void> {
+    await Promise.all([db.settings.clear(), db.vehicles.clear(), db.sessions.clear()]);
   }
 
   async function readSettings(): Promise<Settings> {
@@ -516,10 +707,7 @@ export async function openChargeLogStore(
 
     async updateSettings(changes) {
       validateSettings(changes);
-      const rows = Object.entries(changes).map(
-        ([key, value]) => ({ key, value }) as SettingRow,
-      );
-      await db.settings.bulkPut(rows);
+      await db.settings.bulkPut(settingRows(changes));
     },
 
     listVehicles() {
@@ -628,6 +816,30 @@ export async function openChargeLogStore(
 
     countSessions(vehicleId) {
       return db.sessions.where('vehicleId').equals(vehicleId).count();
+    },
+
+    async exportBackup() {
+      return db.transaction('r', db.settings, db.vehicles, db.sessions, async () => ({
+        format: BACKUP_FORMAT,
+        schemaVersion: BACKUP_SCHEMA_VERSION,
+        exportedAt: new Date().toISOString(),
+        settings: await readSettings(),
+        vehicles: await db.vehicles.toArray(),
+        sessions: await db.sessions.toArray(),
+      }));
+    },
+
+    async restoreBackup(backup) {
+      await db.transaction('rw', db.settings, db.vehicles, db.sessions, async () => {
+        await clearAll();
+        await db.settings.bulkAdd(settingRows(backup.settings));
+        await db.vehicles.bulkAdd(backup.vehicles);
+        await db.sessions.bulkAdd(backup.sessions);
+      });
+    },
+
+    async deleteAllData() {
+      await db.transaction('rw', db.settings, db.vehicles, db.sessions, clearAll);
     },
 
     onReadProblem(listener) {

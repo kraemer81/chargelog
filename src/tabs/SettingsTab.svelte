@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import BackupCard from '../lib/components/BackupCard.svelte';
   import ChargingDefaultsCard from '../lib/components/ChargingDefaultsCard.svelte';
   import VehiclesCard from '../lib/components/VehiclesCard.svelte';
   import { useStore } from '../lib/store/context';
@@ -46,6 +47,8 @@
     {/each}
   </div>
 </section>
+
+<BackupCard />
 
 <style>
   h1 {
