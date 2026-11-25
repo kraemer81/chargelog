@@ -47,7 +47,10 @@
       </section>
     {/if}
     {#if activeTab === 'charge'}
-      <ChargeTab onopensettings={() => (activeTab = 'settings')} />
+      <ChargeTab
+        onopensettings={() => (activeTab = 'settings')}
+        onopenhistory={() => (activeTab = 'history')}
+      />
     {:else if activeTab === 'history'}
       <HistoryTab />
     {:else}

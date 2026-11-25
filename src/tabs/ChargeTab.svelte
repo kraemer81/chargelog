@@ -6,6 +6,7 @@
   } from '../lib/components/ChargingRatesFields.svelte';
   import DateInput from '../lib/components/DateInput.svelte';
   import PercentRangeInput from '../lib/components/PercentRangeInput.svelte';
+  import EditIcon from '../lib/components/EditIcon.svelte';
   import SessionSummary from '../lib/components/SessionSummary.svelte';
   import SessionTotalsList from '../lib/components/SessionTotalsList.svelte';
   import {
@@ -28,7 +29,8 @@
     type Vehicle,
   } from '../lib/store/store';
 
-  let { onopensettings }: { onopensettings: () => void } = $props();
+  let { onopensettings, onopenhistory }: { onopensettings: () => void; onopenhistory: () => void } =
+    $props();
 
   const store = useStore();
   const RECENT_LIMIT = 5;
@@ -207,12 +209,7 @@
         {formatPricePerKwh(settings.defaultPricePerKwh)} · {formatDecimal(
           settings.defaultChargingLossPercent,
         )} % Verlust
-        <!-- Material Icons "edit" (Apache License 2.0). -->
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"
-          />
-        </svg>
+        <EditIcon />
       </button>
     {/if}
 
@@ -271,7 +268,10 @@
 
   {#if recent.length > 0}
     <section class="card">
-      <h2>Letzte Ladevorgänge</h2>
+      <div class="card-header">
+        <h2>Letzte Ladevorgänge</h2>
+        <button type="button" class="text" onclick={onopenhistory}>Alle anzeigen</button>
+      </div>
       <ul>
         {#each recent as session (session.id)}
           <li
@@ -325,7 +325,7 @@
     cursor: pointer;
   }
 
-  .rates-summary svg {
+  .rates-summary :global(svg) {
     width: 18px;
     height: 18px;
     fill: currentColor;
@@ -380,6 +380,18 @@
 
   .preview .error {
     align-self: center;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    /* The button's touch target bleeds into the card padding instead of growing the header. */
+    margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-3)) 0 0;
+  }
+
+  .card-header h2 {
+    margin: 0;
   }
 
   ul {

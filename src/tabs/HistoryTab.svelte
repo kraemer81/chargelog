@@ -3,6 +3,7 @@
   import DateInput from '../lib/components/DateInput.svelte';
   import MonthlyChart from '../lib/components/MonthlyChart.svelte';
   import SessionEditDialog from '../lib/components/SessionEditDialog.svelte';
+  import EditIcon from '../lib/components/EditIcon.svelte';
   import SessionSummary from '../lib/components/SessionSummary.svelte';
   import SessionTotalsList from '../lib/components/SessionTotalsList.svelte';
   import {
@@ -14,6 +15,8 @@
   import type { ChargingSession, History, SessionFilter, Vehicle } from '../lib/store/store';
 
   const store = useStore();
+  /** Sessions the list shows at first and adds per "Weitere anzeigen". */
+  const PAGE_SIZE = 20;
 
   let vehicles = $state<Vehicle[]>([]);
   /** `''` for all vehicles, otherwise a vehicle id. */
@@ -42,6 +45,11 @@
   });
   const hasFilter = $derived(vehicleFilter !== '' || from !== '' || to !== '');
   const vehicleNames = $derived(new Map(vehicles.map((v) => [v.id, v.name])));
+  /** How many sessions the list shows; starts over with every new filter. */
+  let shownCount = $derived.by(() => {
+    void filter;
+    return PAGE_SIZE;
+  });
 
   $effect(() => {
     const subscription = store.watchHistory(filter).subscribe((value) => (history = value));
@@ -81,6 +89,41 @@
     <SessionTotalsList totals={history.totals} showBatteryEnergy />
   </section>
 
+  <section class="card">
+    {#if history.sessions.length === 0}
+      <p class="hint">
+        {hasFilter ? 'Keine Ladevorgänge für diesen Filter.' : 'Noch keine Ladevorgänge erfasst.'}
+      </p>
+    {:else}
+      <ul>
+        {#each history.sessions.slice(0, shownCount) as session (session.id)}
+          <li>
+            <button
+              type="button"
+              class="session"
+              aria-label="Ladevorgang vom {formatIsoDate(session.date)} bearbeiten"
+              onclick={() => (editing = session)}
+            >
+              <span class="summary">
+                <SessionSummary
+                  {session}
+                  vehicleName={vehicles.length > 1 ? vehicleNames.get(session.vehicleId) : undefined}
+                  showPrice
+                />
+              </span>
+              <EditIcon />
+            </button>
+          </li>
+        {/each}
+      </ul>
+      {#if history.sessions.length > shownCount}
+        <button type="button" class="text more" onclick={() => (shownCount += PAGE_SIZE)}>
+          Weitere anzeigen
+        </button>
+      {/if}
+    {/if}
+  </section>
+
   {#if history.months.length > 0}
     <MonthlyChart months={history.months} />
 
@@ -108,33 +151,6 @@
       </table>
     </section>
   {/if}
-
-  <section class="card">
-    {#if history.sessions.length === 0}
-      <p class="hint">
-        {hasFilter ? 'Keine Ladevorgänge für diesen Filter.' : 'Noch keine Ladevorgänge erfasst.'}
-      </p>
-    {:else}
-      <ul>
-        {#each history.sessions as session (session.id)}
-          <li>
-            <button
-              type="button"
-              class="session"
-              aria-label="Ladevorgang vom {formatIsoDate(session.date)} bearbeiten"
-              onclick={() => (editing = session)}
-            >
-              <SessionSummary
-                {session}
-                vehicleName={vehicles.length > 1 ? vehicleNames.get(session.vehicleId) : undefined}
-                showPrice
-              />
-            </button>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  </section>
 {/if}
 
 {#if editing}
@@ -215,7 +231,8 @@
 
   .session {
     display: flex;
-    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
     width: 100%;
     min-height: var(--touch-target);
     padding: var(--space-2) 0;
@@ -225,4 +242,22 @@
     cursor: pointer;
   }
 
+  .summary {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .session :global(svg) {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    fill: var(--color-on-surface-variant);
+  }
+
+  .more {
+    display: block;
+    margin: var(--space-2) auto 0;
+  }
 </style>
