@@ -1,4 +1,5 @@
 import Dexie, { liveQuery, type EntityTable, type Observable } from 'dexie';
+import { todayIsoDate } from '../format';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
@@ -107,10 +108,30 @@ export interface SessionTotals {
   costEur: number;
 }
 
-/** The charging sessions matching a filter, newest first, and their totals. */
+/** Totals of the sessions in one calendar month. */
+export interface MonthTotals extends SessionTotals {
+  /** `YYYY-MM` */
+  month: string;
+}
+
+/** Totals of the sessions in one calendar year. */
+export interface YearTotals extends SessionTotals {
+  /** `YYYY` */
+  year: string;
+}
+
+/**
+ * The charging sessions matching a filter, newest first, their totals, and
+ * their totals per month and per year of the filtered range, oldest first;
+ * months and years without sessions are zero. Without a
+ * start date the range starts with the first matching session; without an end
+ * date it ends with the current month, or a later session.
+ */
 export interface History {
   sessions: ChargingSession[];
   totals: SessionTotals;
+  months: MonthTotals[];
+  years: YearTotals[];
 }
 
 /**
@@ -130,6 +151,38 @@ function totalsOf(sessions: ChargingSession[]): SessionTotals {
     gridEnergyKwh: sum((s) => s.gridEnergyKwh),
     batteryEnergyKwh: sum(batteryEnergyKwh),
     costEur: sum((s) => s.costEur),
+  };
+}
+
+/** Every month from `first` to `last` (both `YYYY-MM`, inclusive). */
+function monthsBetween(first: string, last: string): string[] {
+  const months: string[] = [];
+  let [year, month] = first.split('-').map(Number) as [number, number];
+  for (let current = first; current <= last; ) {
+    months.push(current);
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+    current = `${year}-${String(month).padStart(2, '0')}`;
+  }
+  return months;
+}
+
+/** Totals per month and per year from `first` to `last` (`YYYY-MM`); see `History`. */
+function periodTotalsBetween(
+  sessions: ChargingSession[],
+  first: string,
+  last: string,
+): Pick<History, 'months' | 'years'> {
+  const byMonth = Map.groupBy(sessions, (session) => session.date.slice(0, 7));
+  const byYear = Map.groupBy(sessions, (session) => session.date.slice(0, 4));
+  const months = monthsBetween(first, last);
+  const years = [...new Set(months.map((month) => month.slice(0, 4)))];
+  return {
+    months: months.map((month) => ({ month, ...totalsOf(byMonth.get(month) ?? []) })),
+    years: years.map((year) => ({ year, ...totalsOf(byYear.get(year) ?? []) })),
   };
 }
 
@@ -261,6 +314,8 @@ export interface ReadProblem {
 export interface StoreOptions {
   /** After how long an unfinished read is reported as slow. */
   slowReadMs?: number;
+  /** The current local date, `YYYY-MM-DD`. */
+  today?: () => string;
 }
 
 /**
@@ -316,7 +371,7 @@ export interface ChargeLogStore {
 
 export async function openChargeLogStore(
   name = 'chargelog',
-  { slowReadMs = 5000 }: StoreOptions = {},
+  { slowReadMs = 5000, today = () => todayIsoDate() }: StoreOptions = {},
 ): Promise<ChargeLogStore> {
   const db = new ChargeLogDb(name);
   await db.open();
@@ -427,7 +482,20 @@ export async function openChargeLogStore(
             .where('[vehicleId+date]')
             .between([filter.vehicleId, from], [filter.vehicleId, to], true, true);
     const sessions = await matching.reverse().toArray();
-    return { sessions, totals: totalsOf(sessions) };
+    return { sessions, totals: totalsOf(sessions), ...periodTotalsInFilter(sessions, filter) };
+  }
+
+  /** Totals per month and per year of the filter's range; see `History`. */
+  function periodTotalsInFilter(
+    sessions: ChargingSession[],
+    filter: SessionFilter,
+  ): Pick<History, 'months' | 'years'> {
+    const monthOf = (date: string) => date.slice(0, 7);
+    const first = filter.from ?? sessions.at(-1)?.date;
+    const newest = sessions[0]?.date ?? '';
+    const last = filter.to ?? (newest > today() ? newest : today());
+    if (!first || last < first) return { months: [], years: [] };
+    return periodTotalsBetween(sessions, monthOf(first), monthOf(last));
   }
 
   return {

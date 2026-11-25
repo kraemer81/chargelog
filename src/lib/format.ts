@@ -63,3 +63,26 @@ export function parseDecimal(text: string): number {
   const trimmed = text.trim();
   return /^\d+([.,]\d+)?$/.test(trimmed) ? Number(trimmed.replace(',', '.')) : Number.NaN;
 }
+
+const longMonth = new Intl.DateTimeFormat('de-DE', { month: 'long', year: 'numeric' });
+const shortMonth = new Intl.DateTimeFormat('de-DE', { month: 'short' });
+
+function monthDate(month: string): Date {
+  const [year, monthNumber] = month.split('-').map(Number);
+  return new Date(year!, monthNumber! - 1, 1);
+}
+
+/** "Oktober 2026" for `2026-10`. */
+export function formatMonth(month: string): string {
+  return longMonth.format(monthDate(month));
+}
+
+/** "Okt" for `2026-10`. */
+export function formatShortMonth(month: string): string {
+  return shortMonth.format(monthDate(month)).replace('.', '');
+}
+
+/** "Ladevorgang" for exactly one session, otherwise "Ladevorgänge". */
+export function sessionsLabel(count: number): string {
+  return count === 1 ? 'Ladevorgang' : 'Ladevorgänge';
+}

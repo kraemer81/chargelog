@@ -541,6 +541,113 @@ describe('history', () => {
   });
 });
 
+describe('statistics', () => {
+  /** Reopens the store with `today` as the current date. */
+  async function reopenOn(today: string) {
+    store.close();
+    store = await openChargeLogStore(dbName, { today: () => today });
+  }
+
+  /** Logs a session of 38.28 kWh from the grid for 12.25 € (ID.3, 20 → 80 %, 0.32 €/kWh, 10 %). */
+  async function logStandardCharge(vehicleId: number, date: string) {
+    await store.addSession({
+      vehicleId,
+      date,
+      startPercent: 20,
+      endPercent: 80,
+      rates: { pricePerKwh: 0.32, chargingLossPercent: 10 },
+    });
+  }
+
+  const ZERO = { sessionCount: 0, gridEnergyKwh: 0, batteryEnergyKwh: 0, costEur: 0 };
+  const ONE = { sessionCount: 1, gridEnergyKwh: 38.28, batteryEnergyKwh: 34.8, costEur: 12.25 };
+  const TWO = { sessionCount: 2, gridEnergyKwh: 76.56, batteryEnergyKwh: 69.6, costEur: 24.5 };
+
+  it('totals each month of the filtered range, months without sessions as zero', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await logStandardCharge(id3.id, '2026-08-31');
+    await logStandardCharge(id3.id, '2026-09-01');
+    await logStandardCharge(id3.id, '2026-09-30');
+    await logStandardCharge(id3.id, '2026-11-15');
+
+    const history = await store.getHistory({ from: '2026-08-15', to: '2026-12-10' });
+
+    expect(history.months).toEqual([
+      { month: '2026-08', ...ONE },
+      { month: '2026-09', ...TWO },
+      { month: '2026-10', ...ZERO },
+      { month: '2026-11', ...ONE },
+      { month: '2026-12', ...ZERO },
+    ]);
+  });
+
+  it('without dates, covers the months from the first session up to the current month', async () => {
+    await reopenOn('2026-11-25');
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await logStandardCharge(id3.id, '2026-09-10');
+
+    const history = await store.getHistory({});
+
+    expect(history.months.map((m) => m.month)).toEqual(['2026-09', '2026-10', '2026-11']);
+  });
+
+  it('without an end date, reaches a session logged after the current month', async () => {
+    await reopenOn('2026-11-25');
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await logStandardCharge(id3.id, '2027-01-02');
+
+    const history = await store.getHistory({ from: '2026-11-01' });
+
+    expect(history.months.map((m) => m.month)).toEqual(['2026-11', '2026-12', '2027-01']);
+  });
+
+  it('totals each year of the filtered range, years without sessions as zero', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await logStandardCharge(id3.id, '2024-12-31');
+    await logStandardCharge(id3.id, '2026-01-01');
+    await logStandardCharge(id3.id, '2026-12-31');
+
+    const history = await store.getHistory({ from: '2024-12-01', to: '2027-01-31' });
+
+    expect(history.years).toEqual([
+      { year: '2024', ...ONE },
+      { year: '2025', ...ZERO },
+      { year: '2026', ...TWO },
+      { year: '2027', ...ZERO },
+    ]);
+  });
+
+  it('counts only the filtered vehicle in months and years', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const ev6 = await store.addVehicle({ name: 'EV6', batteryCapacityKwh: 77 });
+    await logStandardCharge(id3.id, '2026-10-05');
+    await logStandardCharge(ev6.id, '2026-10-06');
+
+    const history = await store.getHistory({
+      vehicleId: id3.id,
+      from: '2026-10-01',
+      to: '2026-10-31',
+    });
+
+    expect(history.months).toEqual([{ month: '2026-10', ...ONE }]);
+    expect(history.years).toEqual([{ year: '2026', ...ONE }]);
+  });
+
+  it('has no months while there is nothing to cover', async () => {
+    await reopenOn('2026-11-25');
+
+    expect((await store.getHistory({})).months).toEqual([]);
+    expect((await store.getHistory({ to: '2026-11-30' })).months).toEqual([]);
+  });
+
+  it('has no months or years when the end date is before the start date', async () => {
+    const history = await store.getHistory({ from: '2026-10-20', to: '2026-10-05' });
+
+    expect(history.months).toEqual([]);
+    expect(history.years).toEqual([]);
+  });
+});
+
 describe('editing and deleting sessions', () => {
   it('recalculates grid energy and cost from the edited values', async () => {
     const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });

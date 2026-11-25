@@ -1,12 +1,14 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import DateInput from '../lib/components/DateInput.svelte';
+  import MonthlyChart from '../lib/components/MonthlyChart.svelte';
   import SessionEditDialog from '../lib/components/SessionEditDialog.svelte';
   import SessionSummary from '../lib/components/SessionSummary.svelte';
   import {
     formatEuro,
     formatIsoDate,
     formatKwh,
+    sessionsLabel,
   } from '../lib/format';
   import { useStore } from '../lib/store/context';
   import type { ChargingSession, History, SessionFilter, Vehicle } from '../lib/store/store';
@@ -50,10 +52,6 @@
     vehicleFilter = '';
     from = '';
     to = '';
-  }
-
-  function sessionsLabel(count: number): string {
-    return count === 1 ? 'Ladevorgang' : 'Ladevorgänge';
   }
 </script>
 
@@ -99,6 +97,34 @@
       </div>
     </dl>
   </section>
+
+  {#if history.months.length > 0}
+    <MonthlyChart months={history.months} />
+
+    <section class="card" aria-label="Pro Jahr">
+      <h2>Pro Jahr</h2>
+      <table class="years">
+        <thead>
+          <tr>
+            <th scope="col">Jahr</th>
+            <th scope="col">Ladevorgänge</th>
+            <th scope="col">Aus dem Netz</th>
+            <th scope="col">Kosten</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each history.years.toReversed() as row (row.year)}
+            <tr>
+              <th scope="row">{row.year}</th>
+              <td>{row.sessionCount}</td>
+              <td>{formatKwh(row.gridEnergyKwh)}</td>
+              <td>{formatEuro(row.costEur)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </section>
+  {/if}
 
   <section class="card">
     {#if history.sessions.length === 0}
@@ -181,6 +207,37 @@
 
   .hint {
     margin: 0;
+  }
+
+  .years {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-label);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .years th,
+  .years td {
+    padding: var(--space-2) 0;
+    text-align: right;
+  }
+
+  .years th:first-child {
+    text-align: left;
+  }
+
+  .years thead th {
+    padding-top: 0;
+    font-weight: 400;
+    color: var(--color-on-surface-variant);
+  }
+
+  .years tbody tr {
+    border-top: 1px solid var(--color-outline-variant);
+  }
+
+  .years tbody th {
+    font-weight: 500;
   }
 
   ul {
