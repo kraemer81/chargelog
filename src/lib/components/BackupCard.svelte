@@ -81,7 +81,7 @@
   <h2>Daten</h2>
   <p class="hint">
     Sichere alle Fahrzeuge, Ladevorgänge und Einstellungen in einer Datei, z. B. vor einem
-    Gerätewechsel.
+    Gerätewechsel. Auch eine Sicherung der alten EV-Charter-App lässt sich wiederherstellen.
   </p>
 
   <div class="actions">

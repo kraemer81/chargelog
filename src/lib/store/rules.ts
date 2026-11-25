@@ -1,7 +1,8 @@
 /**
- * Domain rules shared by the store and the backup check: what makes a value
- * valid, and how names and notes are normalised.
+ * Domain rules shared by the store and the backup check: the default settings,
+ * what makes a value valid, and how names and notes are normalised.
  */
+import type { Settings } from './store';
 
 /**
  * A rejected store operation. The message is German and meant to be shown to
@@ -14,6 +15,13 @@ export class ValidationError extends Error {
 export const THEME_PREFERENCES = ['system', 'light', 'dark'] as const;
 
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
+
+/** The settings of a fresh install. */
+export const DEFAULT_SETTINGS: Settings = {
+  themePreference: 'system',
+  defaultPricePerKwh: 0.3,
+  defaultChargingLossPercent: 10,
+};
 
 /**
  * Why a start/end pair of a charging session can't be saved, as a German
@@ -62,4 +70,9 @@ export function vehicleNameKey(name: string): string {
 export function noteField(note: string | undefined): { note?: string } {
   const trimmed = note?.trim();
   return trimmed ? { note: trimmed } : {};
+}
+
+/** True for a plain JSON object, as read from a backup file. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

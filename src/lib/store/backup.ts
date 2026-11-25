@@ -2,6 +2,7 @@
 import {
   chargingLossError,
   isIsoDate,
+  isRecord,
   noteField,
   percentageError,
   priceError,
@@ -10,6 +11,7 @@ import {
   vehicleNameKey,
   type ThemePreference,
 } from './rules';
+import { fromLegacyExport, isLegacyExport } from './legacyBackup';
 import type { ChargingSession, Settings, Vehicle } from './store';
 
 /** Identifies a ChargeLog backup file. */
@@ -44,16 +46,20 @@ export function writeBackup(backup: Backup): string {
 }
 
 /**
- * Parses and checks the text of a backup file. Throws a `ValidationError`
- * with a German message if it is not a valid ChargeLog backup.
+ * Parses and checks the text of a backup file: a ChargeLog backup, or an
+ * export of the old EV-Charter app, which is converted first. Throws a
+ * `ValidationError` with a German message if it is neither, or not valid.
  */
 export function readBackup(text: string): Backup {
-  let data: unknown;
+  let parsed: unknown;
   try {
-    data = JSON.parse(text);
+    parsed = JSON.parse(text);
   } catch {
     throw new ValidationError('Die Datei ist keine gültige Sicherung.');
   }
+  const data = isLegacyExport(parsed)
+    ? { format: BACKUP_FORMAT, schemaVersion: BACKUP_SCHEMA_VERSION, ...fromLegacyExport(parsed) }
+    : parsed;
   if (!isRecord(data) || data.format !== BACKUP_FORMAT) {
     throw new ValidationError('Die Datei ist keine ChargeLog-Sicherung.');
   }
@@ -181,8 +187,4 @@ function isId(value: unknown): value is number {
 
 function isUnique(values: unknown[]): boolean {
   return new Set(values).size === values.length;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

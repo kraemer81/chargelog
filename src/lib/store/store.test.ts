@@ -926,6 +926,241 @@ describe('backup', () => {
   });
 });
 
+describe('legacy EV-Charter backup', () => {
+  /** Mirrors an export of the old EV-Charter app, with gaps in its ids. */
+  function legacyExport(settings: unknown = legacySettingList()) {
+    return {
+      version: 2,
+      exportDate: '2025-03-14T18:30:00.000Z',
+      vehicles: [
+        { id: 3, name: 'ID.3', batterySize: 58, isDefault: false },
+        { id: 7, name: 'Outlander', batterySize: 20, isDefault: true },
+      ],
+      sessions: [
+        {
+          id: 4,
+          vehicleId: 7,
+          date: '2025-03-01',
+          startPercentage: 10,
+          endPercentage: 90,
+          energy: 17.6,
+          cost: 5.28,
+        },
+        {
+          id: 9,
+          vehicleId: 3,
+          date: '2025-03-02',
+          startPercentage: 20,
+          endPercentage: 80,
+          energy: 38.28,
+          cost: 11.48,
+        },
+        {
+          id: 12,
+          vehicleId: 3,
+          date: '2025-03-05',
+          startPercentage: 30,
+          endPercentage: 70,
+          energy: 25.52,
+          cost: 7.66,
+        },
+      ],
+      settings,
+    };
+  }
+
+  function legacySettingList() {
+    return [
+      { name: 'electricityPrice', value: 0.3 },
+      { name: 'chargingLoss', value: 10 },
+      { name: 'darkMode', value: true },
+      { name: 'language', value: 'de' },
+    ];
+  }
+
+  it('imports vehicles with their capacity and default', async () => {
+    await restore(JSON.stringify(legacyExport()));
+
+    const vehicles = await store.listVehicles();
+    expect(
+      vehicles.map(({ name, batteryCapacityKwh, isDefault }) => ({
+        name,
+        batteryCapacityKwh,
+        isDefault,
+      })),
+    ).toEqual([
+      { name: 'ID.3', batteryCapacityKwh: 58, isDefault: false },
+      { name: 'Outlander', batteryCapacityKwh: 20, isDefault: true },
+    ]);
+  });
+
+  it("keeps each session's energy and cost and gives it the legacy price and loss", async () => {
+    const legacy = legacyExport([
+      { name: 'electricityPrice', value: 0.28 },
+      { name: 'chargingLoss', value: 12 },
+    ]);
+
+    await restore(JSON.stringify(legacy));
+
+    const { sessions } = await store.getHistory({});
+    expect(
+      sessions.map(
+        ({
+          date,
+          startPercent,
+          endPercent,
+          gridEnergyKwh,
+          costEur,
+          pricePerKwh,
+          chargingLossPercent,
+        }) => ({
+          date,
+          startPercent,
+          endPercent,
+          gridEnergyKwh,
+          costEur,
+          pricePerKwh,
+          chargingLossPercent,
+        }),
+      ),
+    ).toEqual([
+      {
+        date: '2025-03-05',
+        startPercent: 30,
+        endPercent: 70,
+        gridEnergyKwh: 25.52,
+        costEur: 7.66,
+        pricePerKwh: 0.28,
+        chargingLossPercent: 12,
+      },
+      {
+        date: '2025-03-02',
+        startPercent: 20,
+        endPercent: 80,
+        gridEnergyKwh: 38.28,
+        costEur: 11.48,
+        pricePerKwh: 0.28,
+        chargingLossPercent: 12,
+      },
+      {
+        date: '2025-03-01',
+        startPercent: 10,
+        endPercent: 90,
+        gridEnergyKwh: 17.6,
+        costEur: 5.28,
+        pricePerKwh: 0.28,
+        chargingLossPercent: 12,
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      'a list',
+      [
+        { name: 'electricityPrice', value: 0.28 },
+        { name: 'chargingLoss', value: 12 },
+        { name: 'darkMode', value: true },
+      ],
+    ],
+    [
+      'an object map',
+      {
+        electricityPrice: 0.28,
+        chargingLoss: 12,
+        darkMode: true,
+        language: 'en',
+      },
+    ],
+  ])(
+    'makes the legacy price and loss the new defaults, from settings as %s',
+    async (_, settings) => {
+      await store.updateSettings({ themePreference: 'light' });
+
+      await restore(JSON.stringify(legacyExport(settings)));
+
+      expect(await store.getSettings()).toEqual({
+        themePreference: 'system',
+        defaultPricePerKwh: 0.28,
+        defaultChargingLossPercent: 12,
+      });
+    },
+  );
+
+  it('falls back to 10 % charging loss when the export has none', async () => {
+    await restore(JSON.stringify(legacyExport({ electricityPrice: 0.28 })));
+
+    const { sessions } = await store.getHistory({});
+    expect(sessions.map((s) => s.chargingLossPercent)).toEqual([10, 10, 10]);
+    expect((await store.getSettings()).defaultChargingLossPercent).toBe(10);
+  });
+
+  it('replaces all existing data, and logging continues afterwards', async () => {
+    const egolf = await store.addVehicle({
+      name: 'e-Golf',
+      batteryCapacityKwh: 32,
+    });
+    await store.addSession({
+      vehicleId: egolf.id,
+      date: '2026-11-01',
+      startPercent: 20,
+      endPercent: 80,
+    });
+
+    await restore(JSON.stringify(legacyExport()));
+    const id3 = (await store.listVehicles()).find((v) => v.name === 'ID.3')!;
+    await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-02',
+      startPercent: 30,
+      endPercent: 90,
+    });
+
+    expect((await store.listVehicles()).map((v) => v.name)).toEqual(['ID.3', 'Outlander']);
+    expect((await store.getHistory({})).totals.sessionCount).toBe(4);
+  });
+
+  it('makes the first vehicle the default when the export has none', async () => {
+    const legacy = legacyExport();
+    legacy.vehicles.forEach((v) => (v.isDefault = false));
+
+    await restore(JSON.stringify(legacy));
+
+    expect((await store.listVehicles()).map((v) => v.isDefault)).toEqual([true, false]);
+  });
+
+  type LegacyData = Record<string, any>;
+  it.each<[string, (legacy: LegacyData) => void]>([
+    ['a session of an unknown vehicle', (l) => (l.sessions[0].vehicleId = 999)],
+    ['a session without energy', (l) => delete l.sessions[0].energy],
+    ['a vehicle without battery size', (l) => delete l.vehicles[0].batterySize],
+    ['a negative electricity price', (l) => (l.settings = { electricityPrice: -1 })],
+    ['an invalid export date', (l) => (l.exportDate = 'gestern')],
+  ])('rejects an export with %s and keeps the existing data', async (_, corrupt) => {
+    await store.addVehicle({ name: 'e-Golf', batteryCapacityKwh: 32 });
+    const legacy = legacyExport() as LegacyData;
+    corrupt(legacy);
+    const before = await snapshot();
+
+    await expect(restore(JSON.stringify(legacy))).rejects.toThrow(
+      'Die Sicherung ist beschädigt oder unvollständig.',
+    );
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it('keeps each session with its vehicle', async () => {
+    await restore(JSON.stringify(legacyExport()));
+
+    const vehicles = await store.listVehicles();
+    const datesOf = async (name: string) => {
+      const vehicleId = vehicles.find((v) => v.name === name)!.id;
+      return (await store.getHistory({ vehicleId })).sessions.map((s) => s.date);
+    };
+    expect(await datesOf('ID.3')).toEqual(['2025-03-05', '2025-03-02']);
+    expect(await datesOf('Outlander')).toEqual(['2025-03-01']);
+  });
+});
+
 describe('deleting all data', () => {
   it('removes vehicles and sessions and resets the settings to their defaults', async () => {
     await store.updateSettings({ themePreference: 'dark', defaultPricePerKwh: 0.32 });

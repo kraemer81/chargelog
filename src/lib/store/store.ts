@@ -3,6 +3,7 @@ import { todayIsoDate } from '../format';
 import { createBackup, type Backup } from './backup';
 import {
   chargingLossError,
+  DEFAULT_SETTINGS,
   isIsoDate,
   noteField,
   percentageError,
@@ -38,12 +39,6 @@ export function defaultRates(settings: Settings): ChargingRates {
     chargingLossPercent: settings.defaultChargingLossPercent,
   };
 }
-
-const DEFAULT_SETTINGS: Settings = {
-  themePreference: 'system',
-  defaultPricePerKwh: 0.3,
-  defaultChargingLossPercent: 10,
-};
 
 export interface Vehicle {
   id: number;
