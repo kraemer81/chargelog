@@ -32,8 +32,8 @@
   const RECENT_LIMIT = 5;
   /** Start and end preselected for every new entry. */
   const SUGGESTED = { startPercent: 20, endPercent: 80 };
-  /** How long a just-saved session lights up in the recent list. */
-  const HIGHLIGHT_MS = 1500;
+  /** How long the save button confirms and the saved session lights up in the recent list. */
+  const CONFIRMATION_MS = 1500;
 
   let vehicles = $state<Vehicle[] | undefined>();
   let settings = $state<Settings | undefined>();
@@ -52,10 +52,10 @@
   });
   let saving = $state(false);
   let error = $state<string | undefined>();
-  let confirmation = $state<string | undefined>();
-  let confirmationTimer: ReturnType<typeof setTimeout> | undefined;
-  let highlightedId = $state<number | undefined>();
-  let highlightTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The just-saved session, while the form confirms it and the recent list highlights it. */
+  let savedId = $state<number | undefined>();
+  let savedTimer: ReturnType<typeof setTimeout> | undefined;
+  const confirming = $derived(savedId !== undefined);
 
   const subscriptions = [
     store.watchVehicles().subscribe((list) => {
@@ -72,8 +72,7 @@
   ];
   onDestroy(() => {
     subscriptions.forEach((s) => s.unsubscribe());
-    clearTimeout(confirmationTimer);
-    clearTimeout(highlightTimer);
+    clearTimeout(savedTimer);
   });
 
   const vehicle = $derived(vehicles?.find((v) => v.id === vehicleId));
@@ -125,7 +124,8 @@
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (vehicleId === undefined || formProblem) return;
+    // While confirming, a second tap must not log the reset form as a duplicate.
+    if (vehicleId === undefined || formProblem || confirming) return;
     saving = true;
     error = undefined;
     try {
@@ -142,8 +142,7 @@
       ({ startPercent, endPercent } = SUGGESTED);
       note = '';
       overriding = false;
-      showConfirmation('Ladevorgang gespeichert');
-      highlight(saved.id);
+      confirmSaved(saved.id);
     } catch (e) {
       if (e instanceof ValidationError) {
         error = e.message;
@@ -156,16 +155,11 @@
     }
   }
 
-  function showConfirmation(message: string) {
-    confirmation = message;
-    clearTimeout(confirmationTimer);
-    confirmationTimer = setTimeout(() => (confirmation = undefined), 3000);
-  }
-
-  function highlight(id: number) {
-    highlightedId = id;
-    clearTimeout(highlightTimer);
-    highlightTimer = setTimeout(() => (highlightedId = undefined), HIGHLIGHT_MS);
+  /** Confirms the save on the button itself, where the user's attention is. */
+  function confirmSaved(id: number) {
+    savedId = id;
+    clearTimeout(savedTimer);
+    savedTimer = setTimeout(() => (savedId = undefined), CONFIRMATION_MS);
   }
 </script>
 
@@ -263,9 +257,26 @@
       <p class="error" role="alert">{error}</p>
     {/if}
 
-    <button type="submit" class="filled" disabled={saving || formProblem !== undefined}>
-      Speichern
+    <button
+      type="submit"
+      class="filled save"
+      class:saved={confirming}
+      style:--confirmation-duration="{CONFIRMATION_MS}ms"
+      disabled={saving || (!confirming && formProblem !== undefined)}
+    >
+      {#if confirming}
+        <!-- Material Icons "check" (Apache License 2.0). -->
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+        </svg>
+        Gespeichert
+      {:else}
+        Speichern
+      {/if}
     </button>
+    <p class="visually-hidden" role="status">
+      {confirming ? 'Ladevorgang gespeichert' : ''}
+    </p>
   </form>
 
   {#if recent.length > 0}
@@ -274,8 +285,8 @@
       <ul>
         {#each recent as session (session.id)}
           <li
-            class:highlighted={session.id === highlightedId}
-            style:--highlight-duration="{HIGHLIGHT_MS}ms"
+            class:highlighted={session.id === savedId}
+            style:--confirmation-duration="{CONFIRMATION_MS}ms"
           >
             <div class="session-main">
               <span>{formatIsoDate(session.date)}</span>
@@ -298,10 +309,6 @@
   {/if}
 {/if}
 
-{#if confirmation}
-  <div class="snackbar" role="status">{confirmation}</div>
-{/if}
-
 <style>
   h1 {
     font-size: var(--font-size-title);
@@ -314,6 +321,8 @@
   }
 
   form {
+    /* Anchors the visually hidden save status. */
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
@@ -496,7 +505,7 @@
     margin: 0 calc(-1 * var(--space-2));
     padding-inline: var(--space-2);
     border-radius: var(--radius-s);
-    animation: highlight var(--highlight-duration) ease-out;
+    animation: highlight var(--confirmation-duration) ease-out;
   }
 
   @keyframes highlight {
@@ -529,17 +538,52 @@
     overflow-wrap: anywhere;
   }
 
-  .snackbar {
-    position: fixed;
-    left: 50%;
-    bottom: calc(var(--nav-height) + env(safe-area-inset-bottom) + var(--space-4));
-    transform: translateX(-50%);
-    max-width: calc(100vw - 2 * var(--space-4));
-    padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-s);
-    background: var(--color-inverse-surface);
-    color: var(--color-inverse-on-surface);
-    box-shadow: var(--elevation-2);
-    font-size: var(--font-size-label);
+  .save {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+  }
+
+  .save svg {
+    width: 20px;
+    height: 20px;
+    fill: currentColor;
+  }
+
+  .save.saved {
+    background: var(--color-primary-container);
+    color: var(--color-on-primary-container);
+    cursor: default;
+    animation: confirm var(--confirmation-duration) ease-out;
+  }
+
+  @keyframes confirm {
+    0% {
+      transform: scale(1);
+    }
+    15% {
+      transform: scale(1.04);
+    }
+    30%,
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .save.saved {
+      animation: none;
+    }
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 </style>
