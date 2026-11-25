@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import Dexie from 'dexie';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   calculateCharge,
@@ -6,6 +7,8 @@ import {
   type ChargeLogStore,
   type ChargingRates,
   type ChargingSession,
+  type ReadProblem,
+  type Settings,
 } from './store';
 
 let dbName: string;
@@ -662,3 +665,43 @@ async function defaultVehicleNames(): Promise<string[]> {
   const vehicles = await store.listVehicles();
   return vehicles.filter((vehicle) => vehicle.isDefault).map((vehicle) => vehicle.name);
 }
+
+describe('read problems', () => {
+  it('reports a read that fails, naming what could not be read', async () => {
+    const problems: ReadProblem[] = [];
+    store.onReadProblem((problem) => problems.push(problem));
+    store.close();
+
+    const subscription = store.watchSettings().subscribe({ error: () => {} });
+
+    await vi.waitFor(() =>
+      expect(problems).toEqual([
+        expect.objectContaining({ data: 'Einstellungen', kind: 'failed' }),
+      ]),
+    );
+    subscription.unsubscribe();
+  });
+
+  it('reports a read that hangs, and does not report it as failed', async () => {
+    store.close();
+    store = await openChargeLogStore(dbName, { slowReadMs: 20 });
+    const problems: ReadProblem[] = [];
+    store.onReadProblem((problem) => problems.push(problem));
+    // A long write from another connection blocks every read of the settings until it ends.
+    let writing = true;
+    const other = await new Dexie(dbName).open();
+    const blocker = other.transaction('rw', 'settings', async () => {
+      while (writing) await other.table('settings').get('themePreference');
+    });
+
+    const settings = await new Promise<Settings>((resolve) => {
+      store.watchSettings().subscribe(resolve);
+      setTimeout(() => (writing = false), 100);
+    });
+    await blocker;
+    other.close();
+
+    expect(settings.themePreference).toBe('system');
+    expect(problems).toEqual([expect.objectContaining({ data: 'Einstellungen', kind: 'slow' })]);
+  });
+});

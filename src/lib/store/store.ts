@@ -248,6 +248,22 @@ class ChargeLogDb extends Dexie {
 }
 
 /**
+ * A read that failed or is taking unusually long. Without it, a broken read
+ * just leaves the UI empty. `data` names what was being read, in German.
+ */
+export interface ReadProblem {
+  data: string;
+  kind: 'failed' | 'slow';
+  /** Technical details, e.g. the error name and message. */
+  detail: string;
+}
+
+export interface StoreOptions {
+  /** After how long an unfinished read is reported as slow. */
+  slowReadMs?: number;
+}
+
+/**
  * The ChargeLog store: the single entry point for all domain behaviour and
  * persistence. UI code talks to this module only, never to Dexie directly.
  */
@@ -291,14 +307,42 @@ export interface ChargeLogStore {
   watchHistory(filter: SessionFilter): Observable<History>;
   /** Number of charging sessions logged for this vehicle. */
   countSessions(vehicleId: number): Promise<number>;
+  /** Calls `listener` for every watched read that fails or hangs; returns an unsubscribe function. */
+  onReadProblem(listener: (problem: ReadProblem) => void): () => void;
   close(): void;
   /** Deletes the underlying database. Intended for tests. */
   destroy(): Promise<void>;
 }
 
-export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogStore> {
+export async function openChargeLogStore(
+  name = 'chargelog',
+  { slowReadMs = 5000 }: StoreOptions = {},
+): Promise<ChargeLogStore> {
   const db = new ChargeLogDb(name);
   await db.open();
+
+  const readProblemListeners = new Set<(problem: ReadProblem) => void>();
+  function reportReadProblem(problem: ReadProblem) {
+    readProblemListeners.forEach((listener) => listener(problem));
+  }
+
+  /** `liveQuery` that reports a failing or hanging `read` of `data`. */
+  function watch<T>(data: string, read: () => Promise<T>): Observable<T> {
+    return liveQuery(async () => {
+      const slowTimer = setTimeout(
+        () => reportReadProblem({ data, kind: 'slow', detail: `> ${slowReadMs} ms` }),
+        slowReadMs,
+      );
+      try {
+        return await read();
+      } catch (e) {
+        reportReadProblem({ data, kind: 'failed', detail: String(e) });
+        throw e;
+      } finally {
+        clearTimeout(slowTimer);
+      }
+    });
+  }
 
   /** Trims the name and rejects values the user has to correct. */
   async function validateVehicle(vehicle: NewVehicle, ownId?: number): Promise<NewVehicle> {
@@ -390,7 +434,7 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     getSettings: readSettings,
 
     watchSettings() {
-      return liveQuery(readSettings);
+      return watch('Einstellungen', readSettings);
     },
 
     async updateSettings(changes) {
@@ -406,7 +450,7 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     },
 
     watchVehicles() {
-      return liveQuery(() => db.vehicles.toArray());
+      return watch('Fahrzeuge', () => db.vehicles.toArray());
     },
 
     async addVehicle(vehicle) {
@@ -480,7 +524,9 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     },
 
     watchRecentSessions(limit) {
-      return liveQuery(() => db.sessions.orderBy('date').reverse().limit(limit).toArray());
+      return watch('Letzte Ladevorgänge', () =>
+        db.sessions.orderBy('date').reverse().limit(limit).toArray(),
+      );
     },
 
     async deleteSession(id) {
@@ -490,11 +536,16 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     getHistory: readHistory,
 
     watchHistory(filter) {
-      return liveQuery(() => readHistory(filter));
+      return watch('Verlauf', () => readHistory(filter));
     },
 
     countSessions(vehicleId) {
       return db.sessions.where('vehicleId').equals(vehicleId).count();
+    },
+
+    onReadProblem(listener) {
+      readProblemListeners.add(listener);
+      return () => readProblemListeners.delete(listener);
     },
 
     close() {
