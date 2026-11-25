@@ -1,7 +1,27 @@
-<script lang="ts">
+<script lang="ts" module>
+  import { formatEditableDecimal, parseDecimal } from '../format';
   import type { ChargingRates } from '../store/store';
 
   type Field = keyof ChargingRates;
+
+  /** What the fields show for `rates`, as editable German decimals. */
+  export function ratesText(rates: ChargingRates): Record<Field, string> {
+    return {
+      pricePerKwh: formatEditableDecimal(rates.pricePerKwh),
+      chargingLossPercent: formatEditableDecimal(rates.chargingLossPercent),
+    };
+  }
+
+  /** The rates typed into the fields; unparsable text becomes NaN. */
+  export function parseRatesText(text: Record<Field, string>): ChargingRates {
+    return {
+      pricePerKwh: parseDecimal(text.pricePerKwh),
+      chargingLossPercent: parseDecimal(text.chargingLossPercent),
+    };
+  }
+</script>
+
+<script lang="ts">
 
   let {
     text = $bindable(),

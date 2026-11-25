@@ -79,6 +79,60 @@ export interface ChargingSession extends Omit<NewChargingSession, 'rates'>, Char
   costEur: number;
 }
 
+/** Everything about a logged session that can be edited; energy and cost follow from it. */
+export type SessionChanges = Omit<NewChargingSession, 'rates'> & ChargingRates;
+
+/** The session values grid energy and cost are calculated from. */
+const CALCULATION_INPUTS = [
+  'vehicleId',
+  'startPercent',
+  'endPercent',
+  'pricePerKwh',
+  'chargingLossPercent',
+] as const satisfies readonly (keyof SessionChanges)[];
+
+/** Which charging sessions the history shows; unset fields don't restrict. */
+export interface SessionFilter {
+  vehicleId?: number;
+  /** First included date, `YYYY-MM-DD`. */
+  from?: string;
+  /** Last included date, `YYYY-MM-DD`. */
+  to?: string;
+}
+
+export interface SessionTotals {
+  sessionCount: number;
+  gridEnergyKwh: number;
+  batteryEnergyKwh: number;
+  costEur: number;
+}
+
+/** The charging sessions matching a filter, newest first, and their totals. */
+export interface History {
+  sessions: ChargingSession[];
+  totals: SessionTotals;
+}
+
+/**
+ * Energy that went into the battery, rounded to 2 decimals. Derived from the
+ * session's stored grid energy and charging loss, so it stays consistent with
+ * them even after the vehicle's battery capacity changed.
+ */
+export function batteryEnergyKwh(session: ChargingSession): number {
+  return roundTo2Decimals(session.gridEnergyKwh / (1 + session.chargingLossPercent / 100));
+}
+
+function totalsOf(sessions: ChargingSession[]): SessionTotals {
+  const sum = (value: (session: ChargingSession) => number) =>
+    roundTo2Decimals(sessions.reduce((total, session) => total + value(session), 0));
+  return {
+    sessionCount: sessions.length,
+    gridEnergyKwh: sum((s) => s.gridEnergyKwh),
+    batteryEnergyKwh: sum(batteryEnergyKwh),
+    costEur: sum((s) => s.costEur),
+  };
+}
+
 export interface ChargeInput extends ChargingRates {
   batteryCapacityKwh: number;
   startPercent: number;
@@ -96,11 +150,35 @@ export function calculateCharge(input: ChargeInput): { gridEnergyKwh: number; co
   return { gridEnergyKwh, costEur };
 }
 
+/** The result of checking what the user entered for a charge. */
+export interface ChargeCheck {
+  /** German message per invalid input; a valid input has none. */
+  problems: { percentage?: string; pricePerKwh?: string; chargingLossPercent?: string };
+  /** The first of `problems`, if any. */
+  problem?: string;
+  /** Grid energy and cost, present only when there is no problem. */
+  charge?: { gridEnergyKwh: number; costEur: number };
+}
+
+/**
+ * Validates percentages and rates and, if they are valid, calculates the
+ * charge. The single check behind both the live preview and saving.
+ */
+export function checkCharge(input: ChargeInput): ChargeCheck {
+  const problems = {
+    percentage: percentageError(input.startPercent, input.endPercent),
+    pricePerKwh: priceError(input.pricePerKwh),
+    chargingLossPercent: chargingLossError(input.chargingLossPercent),
+  };
+  const problem = problems.percentage ?? problems.pricePerKwh ?? problems.chargingLossPercent;
+  return problem ? { problems, problem } : { problems, charge: calculateCharge(input) };
+}
+
 /**
  * Why a start/end pair of a charging session can't be saved, as a German
  * message for the user, or `undefined` if it is valid.
  */
-export function percentageError(startPercent: number, endPercent: number): string | undefined {
+function percentageError(startPercent: number, endPercent: number): string | undefined {
   if (!(startPercent >= 0 && startPercent <= 100)) {
     return 'Der Start muss zwischen 0 und 100 % liegen.';
   }
@@ -114,14 +192,14 @@ export function percentageError(startPercent: number, endPercent: number): strin
 }
 
 /** Why a price per kWh can't be used, as a German message, or `undefined` if it is valid. */
-export function priceError(pricePerKwh: number): string | undefined {
+function priceError(pricePerKwh: number): string | undefined {
   return Number.isFinite(pricePerKwh) && pricePerKwh >= 0
     ? undefined
     : 'Bitte gib einen Preis von mindestens 0 € ein.';
 }
 
 /** Why a charging loss can't be used, as a German message, or `undefined` if it is valid. */
-export function chargingLossError(chargingLossPercent: number): string | undefined {
+function chargingLossError(chargingLossPercent: number): string | undefined {
   return chargingLossPercent >= 0 && chargingLossPercent < 100
     ? undefined
     : 'Der Ladeverlust muss zwischen 0 und 100 % liegen.';
@@ -199,6 +277,18 @@ export interface ChargeLogStore {
    * (later entries first within a day), and again after every change.
    */
   watchRecentSessions(limit: number): Observable<ChargingSession[]>;
+  /**
+   * Replaces the session's values. If the vehicle, percentages, price or
+   * charging loss changed, grid energy and cost are recalculated from the
+   * session's own price and charging loss and its vehicle's current battery
+   * capacity; otherwise they are kept as stored.
+   */
+  updateSession(id: number, changes: SessionChanges): Promise<ChargingSession>;
+  deleteSession(id: number): Promise<void>;
+  /** Sessions matching the filter, newest date first (later entries first within a day). */
+  getHistory(filter: SessionFilter): Promise<History>;
+  /** Emits the history for the filter and again after every change. */
+  watchHistory(filter: SessionFilter): Observable<History>;
   /** Number of charging sessions logged for this vehicle. */
   countSessions(vehicleId: number): Promise<number>;
   close(): void;
@@ -234,6 +324,40 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     }
   }
 
+  /**
+   * Validates a session's values and adds the grid energy and cost calculated
+   * from them; a blank note is left out. Must run inside a transaction that
+   * includes the vehicles table.
+   */
+  async function sessionRow(values: SessionChanges): Promise<Omit<ChargingSession, 'id'>> {
+    assertValid(isIsoDate(values.date) ? undefined : 'Bitte gib ein gültiges Datum ein.');
+    const vehicle = await db.vehicles.get(values.vehicleId);
+    if (!vehicle) {
+      throw new ValidationError('Bitte wähle ein Fahrzeug aus.');
+    }
+    const rates: ChargingRates = {
+      pricePerKwh: values.pricePerKwh,
+      chargingLossPercent: values.chargingLossPercent,
+    };
+    const { problem, charge } = checkCharge({
+      batteryCapacityKwh: vehicle.batteryCapacityKwh,
+      startPercent: values.startPercent,
+      endPercent: values.endPercent,
+      ...rates,
+    });
+    if (!charge) throw new ValidationError(problem);
+    const note = values.note?.trim();
+    return {
+      vehicleId: values.vehicleId,
+      date: values.date,
+      startPercent: values.startPercent,
+      endPercent: values.endPercent,
+      ...(note ? { note } : {}),
+      ...rates,
+      ...charge,
+    };
+  }
+
   function validateSettings(changes: Partial<Settings>): void {
     const { defaultPricePerKwh: price, defaultChargingLossPercent: loss } = changes;
     assertValid(
@@ -246,6 +370,20 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     const rows = await db.settings.toArray();
     const stored = Object.fromEntries(rows.map((row) => [row.key, row.value]));
     return { ...DEFAULT_SETTINGS, ...stored };
+  }
+
+  async function readHistory(filter: SessionFilter): Promise<History> {
+    const from = filter.from ?? Dexie.minKey;
+    const to = filter.to ?? Dexie.maxKey;
+    // Both indexes order entries of the same date by id, i.e. by when they were logged.
+    const matching =
+      filter.vehicleId === undefined
+        ? db.sessions.where('date').between(from, to, true, true)
+        : db.sessions
+            .where('[vehicleId+date]')
+            .between([filter.vehicleId, from], [filter.vehicleId, to], true, true);
+    const sessions = await matching.reverse().toArray();
+    return { sessions, totals: totalsOf(sessions) };
   }
 
   return {
@@ -311,42 +449,48 @@ export async function openChargeLogStore(name = 'chargelog'): Promise<ChargeLogS
     },
 
     async addSession(session) {
-      assertValid(
-        percentageError(session.startPercent, session.endPercent),
-        session.rates && priceError(session.rates.pricePerKwh),
-        session.rates && chargingLossError(session.rates.chargingLossPercent),
-      );
-      if (!isIsoDate(session.date)) {
-        throw new ValidationError('Bitte gib ein gültiges Datum ein.');
-      }
-      const note = session.note?.trim();
+      const { rates, ...values } = session;
       return db.transaction('rw', db.vehicles, db.settings, db.sessions, async () => {
-        const vehicle = await db.vehicles.get(session.vehicleId);
-        if (!vehicle) {
-          throw new ValidationError('Bitte wähle ein Fahrzeug aus.');
-        }
-        const rates = session.rates ?? defaultRates(await readSettings());
-        const row = {
-          vehicleId: session.vehicleId,
-          date: session.date,
-          startPercent: session.startPercent,
-          endPercent: session.endPercent,
-          ...(note ? { note } : {}),
-          ...rates,
-          ...calculateCharge({
-            batteryCapacityKwh: vehicle.batteryCapacityKwh,
-            startPercent: session.startPercent,
-            endPercent: session.endPercent,
-            ...rates,
-          }),
-        };
+        const row = await sessionRow({
+          ...values,
+          ...(rates ?? defaultRates(await readSettings())),
+        });
         const id = await db.sessions.add(row as ChargingSession);
         return { ...row, id };
       });
     },
 
+    async updateSession(id, changes) {
+      return db.transaction('rw', db.vehicles, db.sessions, async () => {
+        const stored = await db.sessions.get(id);
+        if (!stored) {
+          throw new ValidationError('Diesen Ladevorgang gibt es nicht mehr.');
+        }
+        const row = await sessionRow(changes);
+        // Only a change to what the calculation uses recalculates; otherwise the
+        // stored values stay, e.g. those from before a capacity change.
+        const recalculate = CALCULATION_INPUTS.some((key) => row[key] !== stored[key]);
+        const session = recalculate
+          ? { ...row, id }
+          : { ...row, id, gridEnergyKwh: stored.gridEnergyKwh, costEur: stored.costEur };
+        // `put` rather than `update`, so a removed note is dropped from the row.
+        await db.sessions.put(session);
+        return session;
+      });
+    },
+
     watchRecentSessions(limit) {
       return liveQuery(() => db.sessions.orderBy('date').reverse().limit(limit).toArray());
+    },
+
+    async deleteSession(id) {
+      await db.sessions.delete(id);
+    },
+
+    getHistory: readHistory,
+
+    watchHistory(filter) {
+      return liveQuery(() => readHistory(filter));
     },
 
     countSessions(vehicleId) {

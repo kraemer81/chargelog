@@ -1,24 +1,23 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import ChargingRatesFields from '../lib/components/ChargingRatesFields.svelte';
+  import ChargingRatesFields, {
+    parseRatesText,
+    ratesText,
+  } from '../lib/components/ChargingRatesFields.svelte';
+  import DateInput from '../lib/components/DateInput.svelte';
   import PercentRangeInput from '../lib/components/PercentRangeInput.svelte';
   import {
     formatDecimal,
-    formatEditableDecimal,
     formatEuro,
     formatIsoDate,
     formatKwh,
     formatPricePerKwh,
-    parseDecimal,
     todayIsoDate,
   } from '../lib/format';
   import { useStore } from '../lib/store/context';
   import {
-    calculateCharge,
-    chargingLossError,
+    checkCharge,
     defaultRates,
-    percentageError,
-    priceError,
     ValidationError,
     type ChargingRates,
     type ChargingSession,
@@ -76,26 +75,13 @@
   });
 
   const vehicle = $derived(vehicles?.find((v) => v.id === vehicleId));
-  const percentageProblem = $derived(percentageError(startPercent, endPercent));
   /** Price and charging loss this session will be saved with. */
   const rates = $derived<ChargingRates | undefined>(
-    overriding
-      ? {
-          pricePerKwh: parseDecimal(rateText.pricePerKwh),
-          chargingLossPercent: parseDecimal(rateText.chargingLossPercent),
-        }
-      : settings && defaultRates(settings),
+    overriding ? parseRatesText(rateText) : settings && defaultRates(settings),
   );
-  const rateProblems = $derived({
-    pricePerKwh: rates && priceError(rates.pricePerKwh),
-    chargingLossPercent: rates && chargingLossError(rates.chargingLossPercent),
-  });
-  const formProblem = $derived(
-    percentageProblem ?? rateProblems.pricePerKwh ?? rateProblems.chargingLossPercent,
-  );
-  const preview = $derived(
-    vehicle && rates && !formProblem
-      ? calculateCharge({
+  const check = $derived(
+    vehicle && rates
+      ? checkCharge({
           batteryCapacityKwh: vehicle.batteryCapacityKwh,
           startPercent,
           endPercent,
@@ -103,6 +89,8 @@
         })
       : undefined,
   );
+  /** Energy and cost to show and save; absent while anything entered is invalid. */
+  const preview = $derived(check?.charge);
   const vehicleNames = $derived(new Map(vehicles?.map((v) => [v.id, v.name])));
 
   /** Selects the vehicle and resets start/end to the suggestion. */
@@ -114,18 +102,14 @@
   /** Starts overriding, prefilled with the defaults. */
   function startOverride() {
     if (!settings) return;
-    const { pricePerKwh, chargingLossPercent } = defaultRates(settings);
-    rateText = {
-      pricePerKwh: formatEditableDecimal(pricePerKwh),
-      chargingLossPercent: formatEditableDecimal(chargingLossPercent),
-    };
+    rateText = ratesText(defaultRates(settings));
     overriding = true;
   }
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     // While confirming, a second tap must not log the reset form as a duplicate.
-    if (vehicleId === undefined || formProblem || confirming) return;
+    if (vehicleId === undefined || !preview || confirming) return;
     saving = true;
     error = undefined;
     try {
@@ -191,25 +175,14 @@
       <p class="single-vehicle">{vehicle?.name}</p>
     {/if}
 
-    <label class="field">
-      <span>Datum</span>
-      <div class="date">
-        <input type="date" bind:value={date} required />
-        <!-- Material Icons "calendar_today" (Apache License 2.0). -->
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            d="M20 3h-1V1h-2v2H7V1H5v2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 18H4V8h16v13z"
-          />
-        </svg>
-      </div>
-    </label>
+    <DateInput label="Datum" bind:value={date} required />
 
     <PercentRangeInput bind:start={startPercent} bind:end={endPercent} />
 
     {#if overriding}
       <fieldset class="rates">
         <legend>Nur für diesen Ladevorgang</legend>
-        <ChargingRatesFields bind:text={rateText} errors={rateProblems} />
+        <ChargingRatesFields bind:text={rateText} errors={check?.problems} />
         <button type="button" class="text reset" onclick={() => (overriding = false)}>
           Standardwerte verwenden
         </button>
@@ -243,8 +216,8 @@
           <span class="preview-value">{formatEuro(preview.costEur)}</span>
           <span class="preview-label">Kosten</span>
         </div>
-      {:else if percentageProblem}
-        <p class="error">{percentageProblem}</p>
+      {:else if check?.problems.percentage}
+        <p class="error">{check.problems.percentage}</p>
       {/if}
     </div>
 
@@ -262,7 +235,7 @@
       class="filled save"
       class:saved={confirming}
       style:--confirmation-duration="{CONFIRMATION_MS}ms"
-      disabled={saving || (!confirming && formProblem !== undefined)}
+      disabled={saving || (!confirming && !preview)}
     >
       {#if confirming}
         <!-- Material Icons "check" (Apache License 2.0). -->
@@ -333,72 +306,6 @@
     font-weight: 500;
   }
 
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    font-size: var(--font-size-label);
-    color: var(--color-on-surface-variant);
-  }
-
-  .field input,
-  .field select {
-    min-height: var(--touch-target);
-    padding: 0 var(--space-3);
-    border: 1px solid var(--color-outline);
-    border-radius: var(--radius-s);
-    background: var(--color-surface);
-    color: var(--color-on-surface);
-    font: inherit;
-    font-size: var(--font-size-body);
-  }
-
-  .date {
-    position: relative;
-  }
-
-  /*
-   * Mobile browsers give date inputs an intrinsic width; make it fill the field.
-   * The native indicator (a tiny arrow on some phones) is replaced by our icon,
-   * indented like the text on the left.
-   */
-  .field input[type='date'] {
-    position: relative;
-    width: 100%;
-    min-width: 0;
-    padding-right: calc(2 * var(--space-3) + 24px);
-    -webkit-appearance: none;
-    appearance: none;
-  }
-
-  /* Invisible but stretched over the field, so tapping anywhere opens the picker. */
-  .field input[type='date']::-webkit-calendar-picker-indicator {
-    position: absolute;
-    inset: 0;
-    width: auto;
-    height: auto;
-    margin: 0;
-    padding: 0;
-    opacity: 0;
-    cursor: pointer;
-  }
-
-  .date svg {
-    position: absolute;
-    top: 50%;
-    right: var(--space-3);
-    width: 24px;
-    height: 24px;
-    transform: translateY(-50%);
-    fill: var(--color-on-surface-variant);
-    pointer-events: none;
-  }
-
-  /* iOS Safari centres the date value by default. */
-  .field input[type='date']::-webkit-date-and-time-value {
-    text-align: left;
-  }
-
   .rates-summary {
     display: flex;
     align-items: center;
@@ -441,12 +348,6 @@
 
   .rates .reset {
     align-self: flex-start;
-  }
-
-  .field input:focus,
-  .field select:focus {
-    outline: 2px solid var(--color-primary);
-    outline-offset: -1px;
   }
 
   .preview {

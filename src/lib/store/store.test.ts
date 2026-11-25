@@ -412,6 +412,239 @@ describe('charging sessions', () => {
   });
 });
 
+describe('history', () => {
+  it('lists all sessions newest first, later entries first within a day', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const log = (date: string, startPercent: number) =>
+      store.addSession({ vehicleId: id3.id, date, startPercent, endPercent: 90 });
+    await log('2026-11-20', 10);
+    await log('2026-11-22', 20);
+    await log('2026-11-21', 30);
+    await log('2026-11-22', 40);
+
+    const history = await store.getHistory({});
+
+    expect(history.sessions.map((s) => s.startPercent)).toEqual([40, 20, 30, 10]);
+  });
+
+  it.each<[{ vehicle?: 'ID.3' | 'EV6'; from?: string; to?: string }, number[]]>([
+    [{}, [60, 50, 40, 30, 20, 10]],
+    [{ vehicle: 'EV6' }, [50, 20]],
+    [{ from: '2026-10-15' }, [60, 50, 40, 30]],
+    [{ to: '2026-10-15' }, [30, 20, 10]],
+    [{ from: '2026-10-15', to: '2026-11-15' }, [50, 40, 30]],
+    [{ vehicle: 'ID.3', from: '2026-10-15', to: '2026-11-15' }, [40, 30]],
+    [{ vehicle: 'ID.3', from: '2026-11-15', to: '2026-10-15' }, []],
+  ])('filters the history by %o, including both dates', async ({ vehicle, ...dates }, expected) => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const ev6 = await store.addVehicle({ name: 'EV6', batteryCapacityKwh: 77 });
+    const vehicles = { 'ID.3': id3.id, EV6: ev6.id };
+    const log = (name: keyof typeof vehicles, date: string, startPercent: number) =>
+      store.addSession({ vehicleId: vehicles[name], date, startPercent, endPercent: 90 });
+    await log('ID.3', '2026-09-30', 10);
+    await log('EV6', '2026-10-01', 20);
+    await log('ID.3', '2026-10-15', 30);
+    await log('ID.3', '2026-10-16', 40);
+    await log('EV6', '2026-11-15', 50);
+    await log('ID.3', '2026-11-16', 60);
+
+    const history = await store.getHistory({
+      ...dates,
+      ...(vehicle ? { vehicleId: vehicles[vehicle] } : {}),
+    });
+
+    expect(history.sessions.map((s) => s.startPercent)).toEqual(expected);
+  });
+
+  it('notifies watchers of a filtered history when a matching session is logged', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const log = (date: string) =>
+      store.addSession({ vehicleId: id3.id, date, startPercent: 20, endPercent: 80 });
+    await log('2026-11-01');
+
+    const seen: number[] = [];
+    const subscription = store
+      .watchHistory({ from: '2026-11-01' })
+      .subscribe((history) => seen.push(history.totals.sessionCount));
+
+    await vi.waitFor(() => expect(seen).toEqual([1]));
+    await log('2026-11-02');
+    await vi.waitFor(() => expect(seen).toEqual([1, 2]));
+
+    subscription.unsubscribe();
+  });
+
+  it('totals the sessions matching the filter', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const ev6 = await store.addVehicle({ name: 'EV6', batteryCapacityKwh: 77 });
+    // 34.8 kWh charged, 38.28 kWh from the grid, 12.25 €.
+    await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-01',
+      startPercent: 20,
+      endPercent: 80,
+      rates: { pricePerKwh: 0.32, chargingLossPercent: 10 },
+    });
+    // 53.9 kWh charged, 60.37 kWh from the grid, 21.13 €.
+    await store.addSession({
+      vehicleId: ev6.id,
+      date: '2026-11-02',
+      startPercent: 15,
+      endPercent: 85,
+      rates: { pricePerKwh: 0.35, chargingLossPercent: 12 },
+    });
+
+    const all = await store.getHistory({});
+    const onlyEv6 = await store.getHistory({ vehicleId: ev6.id });
+    const none = await store.getHistory({ from: '2026-12-01' });
+
+    expect(all.totals).toEqual({
+      sessionCount: 2,
+      gridEnergyKwh: 98.65,
+      batteryEnergyKwh: 88.7,
+      costEur: 33.38,
+    });
+    expect(onlyEv6.totals).toEqual({
+      sessionCount: 1,
+      gridEnergyKwh: 60.37,
+      batteryEnergyKwh: 53.9,
+      costEur: 21.13,
+    });
+    expect(none.totals).toEqual({
+      sessionCount: 0,
+      gridEnergyKwh: 0,
+      batteryEnergyKwh: 0,
+      costEur: 0,
+    });
+  });
+});
+
+describe('editing and deleting sessions', () => {
+  it('recalculates grid energy and cost from the edited values', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const ev6 = await store.addVehicle({ name: 'EV6', batteryCapacityKwh: 77 });
+    const saved = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 20,
+      endPercent: 80,
+      note: 'Garage',
+    });
+
+    const edited = await store.updateSession(saved.id, {
+      vehicleId: ev6.id,
+      date: '2026-11-23',
+      startPercent: 15,
+      endPercent: 85,
+      pricePerKwh: 0.35,
+      chargingLossPercent: 12,
+      note: ' Schnelllader ',
+    });
+
+    const expected = {
+      id: saved.id,
+      vehicleId: ev6.id,
+      date: '2026-11-23',
+      startPercent: 15,
+      endPercent: 85,
+      pricePerKwh: 0.35,
+      chargingLossPercent: 12,
+      gridEnergyKwh: 60.37,
+      costEur: 21.13,
+      note: 'Schnelllader',
+    };
+    expect(edited).toEqual(expected);
+    expect((await store.getHistory({})).sessions).toEqual([expected]);
+  });
+
+  it("recalculates with the vehicle's current battery capacity and the session's own rates", async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    await store.updateSettings({ defaultPricePerKwh: 0.32, defaultChargingLossPercent: 10 });
+    const saved = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 20,
+      endPercent: 80,
+    });
+    await store.updateVehicle(id3.id, { name: 'ID.3', batteryCapacityKwh: 62 });
+    await store.updateSettings({ defaultPricePerKwh: 0.5, defaultChargingLossPercent: 20 });
+
+    const edited = await store.updateSession(saved.id, { ...saved, startPercent: 30 });
+
+    // 62 kWh × 50 % × 1.1 = 34.1 kWh; × 0.32 €/kWh = 10.91 €.
+    expect(edited).toMatchObject({ gridEnergyKwh: 34.1, costEur: 10.91 });
+  });
+
+  it('keeps the stored energy and cost when only the date and note change', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const saved = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 20,
+      endPercent: 80,
+    });
+    await store.updateVehicle(id3.id, { name: 'ID.3', batteryCapacityKwh: 62 });
+
+    const edited = await store.updateSession(saved.id, {
+      ...saved,
+      date: '2026-11-23',
+      note: 'Garage',
+    });
+
+    expect(edited).toEqual({ ...saved, date: '2026-11-23', note: 'Garage' });
+  });
+
+  it('rejects an invalid edit and keeps the session unchanged', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const saved = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 20,
+      endPercent: 80,
+    });
+
+    await expect(
+      store.updateSession(saved.id, {
+        vehicleId: id3.id,
+        date: '2026-11-24',
+        startPercent: 80,
+        endPercent: 20,
+        pricePerKwh: 0.3,
+        chargingLossPercent: 10,
+      }),
+    ).rejects.toThrow('Das Ende muss über dem Start liegen.');
+    expect((await store.getHistory({})).sessions).toEqual([saved]);
+  });
+
+  it('removes the note when it is cleared', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const saved = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 20,
+      endPercent: 80,
+      note: 'Garage',
+    });
+
+    const edited = await store.updateSession(saved.id, { ...saved, note: '  ' });
+
+    expect(edited).not.toHaveProperty('note');
+    expect((await store.getHistory({})).sessions[0]).not.toHaveProperty('note');
+  });
+
+  it('deletes a session, and only that one', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const log = (date: string) =>
+      store.addSession({ vehicleId: id3.id, date, startPercent: 20, endPercent: 80 });
+    const kept = await log('2026-11-23');
+    const removed = await log('2026-11-24');
+
+    await store.deleteSession(removed.id);
+
+    expect((await store.getHistory({})).sessions).toEqual([kept]);
+  });
+});
+
 /** Current value of the recent-sessions watch. */
 async function recentSessions(limit = 10) {
   return new Promise<ChargingSession[]>((resolve, reject) => {
