@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorMessage } from '../errorMessage';
+  import { errorDetail, errorMessage } from '../errorMessage';
   import { formatIsoDate, todayIsoDate } from '../format';
   import { saveFile } from '../saveFile';
   import { useStore } from '../store/context';
@@ -8,23 +8,30 @@
   const store = useStore();
 
   let error = $state<string | undefined>();
+  /** Technical details of an unexpected error, for diagnosing it on the phone. */
+  let detail = $state<string | undefined>();
   let status = $state<string | undefined>();
   let busy = $state(false);
   let fileInput = $state<HTMLInputElement>();
-  /** The backup read from the chosen file, while asking whether to restore it. */
-  let pendingRestore = $state<Backup | undefined>();
+  /**
+   * The backup read from the chosen file, while asking whether to restore it.
+   * Raw, so it stays a plain object: IndexedDB can't store Svelte's state proxies.
+   */
+  let pendingRestore = $state.raw<Backup | undefined>();
   let restoreDialog = $state<HTMLDialogElement>();
   let deleteDialog = $state<HTMLDialogElement>();
 
   /** Clears earlier messages, runs `action` and shows its error, if any. */
   async function run(action: () => Promise<void>, failure: string) {
     error = undefined;
+    detail = undefined;
     status = undefined;
     busy = true;
     try {
       await action();
     } catch (e) {
       error = errorMessage(e, failure);
+      detail = errorDetail(e);
     } finally {
       busy = false;
     }
@@ -109,7 +116,10 @@
   />
 
   {#if error}
-    <p class="error" role="alert">{error}</p>
+    <p class="error" role="alert">
+      {error}
+      {#if detail}<code>{detail}</code>{/if}
+    </p>
   {/if}
   <p class="status" role="status">{status ?? ''}</p>
 
@@ -163,6 +173,12 @@
   .error,
   .status {
     margin-top: var(--space-3);
+  }
+
+  .error code {
+    display: block;
+    overflow-wrap: anywhere;
+    color: var(--color-on-surface-variant);
   }
 
   .status {
