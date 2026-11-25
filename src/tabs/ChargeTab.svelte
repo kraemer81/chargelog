@@ -6,19 +6,19 @@
   } from '../lib/components/ChargingRatesFields.svelte';
   import DateInput from '../lib/components/DateInput.svelte';
   import PercentRangeInput from '../lib/components/PercentRangeInput.svelte';
+  import SessionSummary from '../lib/components/SessionSummary.svelte';
   import {
     formatDecimal,
     formatEuro,
-    formatIsoDate,
     formatKwh,
     formatPricePerKwh,
     todayIsoDate,
   } from '../lib/format';
+  import { errorMessage } from '../lib/errorMessage';
   import { useStore } from '../lib/store/context';
   import {
     checkCharge,
     defaultRates,
-    ValidationError,
     type ChargingRates,
     type ChargingSession,
     type Settings,
@@ -128,12 +128,7 @@
       overriding = false;
       confirmSaved(saved.id);
     } catch (e) {
-      if (e instanceof ValidationError) {
-        error = e.message;
-      } else {
-        console.error(e);
-        error = 'Der Ladevorgang konnte nicht gespeichert werden.';
-      }
+      error = errorMessage(e, 'Der Ladevorgang konnte nicht gespeichert werden.');
     } finally {
       saving = false;
     }
@@ -261,20 +256,10 @@
             class:highlighted={session.id === savedId}
             style:--confirmation-duration="{CONFIRMATION_MS}ms"
           >
-            <div class="session-main">
-              <span>{formatIsoDate(session.date)}</span>
-              <span class="cost">{formatEuro(session.costEur)}</span>
-            </div>
-            <div class="session-details">
-              {#if vehicles.length > 1}
-                <span>{vehicleNames.get(session.vehicleId)}</span> ·
-              {/if}
-              <span>{session.startPercent} → {session.endPercent} %</span> ·
-              <span>{formatKwh(session.gridEnergyKwh)}</span>
-            </div>
-            {#if session.note}
-              <div class="session-details note">{session.note}</div>
-            {/if}
+            <SessionSummary
+              {session}
+              vehicleName={vehicles.length > 1 ? vehicleNames.get(session.vehicleId) : undefined}
+            />
           </li>
         {/each}
       </ul>
@@ -286,11 +271,6 @@
   h1 {
     font-size: var(--font-size-title);
     margin-bottom: var(--space-4);
-  }
-
-  .hint {
-    margin: 0 0 var(--space-3);
-    color: var(--color-on-surface-variant);
   }
 
   form {
@@ -380,12 +360,6 @@
     align-self: center;
   }
 
-  .error {
-    margin: 0;
-    color: var(--color-error);
-    font-size: var(--font-size-label);
-  }
-
   ul {
     list-style: none;
     margin: 0;
@@ -417,26 +391,6 @@
     100% {
       background: transparent;
     }
-  }
-
-  .session-main {
-    display: flex;
-    justify-content: space-between;
-    gap: var(--space-3);
-  }
-
-  .cost {
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .session-details {
-    font-size: var(--font-size-label);
-    color: var(--color-on-surface-variant);
-  }
-
-  .note {
-    overflow-wrap: anywhere;
   }
 
   .save {

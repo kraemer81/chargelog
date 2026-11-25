@@ -95,8 +95,4 @@
   input[aria-invalid='true'] {
     border-color: var(--color-error);
   }
-
-  .error {
-    color: var(--color-error);
-  }
 </style>

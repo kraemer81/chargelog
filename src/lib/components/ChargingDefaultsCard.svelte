@@ -2,7 +2,8 @@
   import { onDestroy } from 'svelte';
   import { formatDecimal, parseDecimal } from '../format';
   import { useStore } from '../store/context';
-  import { defaultRates, ValidationError, type ChargingRates, type Settings } from '../store/store';
+  import { errorMessage } from '../errorMessage';
+  import { defaultRates, type ChargingRates, type Settings } from '../store/store';
   import ChargingRatesFields from './ChargingRatesFields.svelte';
 
   type Field = keyof ChargingRates;
@@ -38,12 +39,7 @@
     try {
       await store.updateSettings({ [SETTING[field]]: parseDecimal(text[field]) });
     } catch (e) {
-      if (e instanceof ValidationError) {
-        errors[field] = e.message;
-      } else {
-        console.error(e);
-        errors[field] = 'Der Wert konnte nicht gespeichert werden.';
-      }
+      errors[field] = errorMessage(e, 'Der Wert konnte nicht gespeichert werden.');
     }
   }
 </script>
@@ -57,8 +53,6 @@
 
 <style>
   .hint {
-    margin: 0 0 var(--space-3);
-    color: var(--color-on-surface-variant);
     font-size: var(--font-size-label);
   }
 </style>

@@ -126,11 +126,6 @@
 </section>
 
 <style>
-  .hint {
-    margin: 0 0 var(--space-3);
-    color: var(--color-on-surface-variant);
-  }
-
   ul {
     list-style: none;
     margin: 0 0 var(--space-3);
@@ -183,10 +178,5 @@
     flex-wrap: wrap;
     justify-content: flex-end;
     margin-right: calc(-1 * var(--space-3));
-  }
-
-  dialog p {
-    margin: 0 0 var(--space-5);
-    color: var(--color-on-surface-variant);
   }
 </style>

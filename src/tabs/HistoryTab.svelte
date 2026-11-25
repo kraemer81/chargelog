@@ -2,11 +2,11 @@
   import { untrack } from 'svelte';
   import DateInput from '../lib/components/DateInput.svelte';
   import SessionEditDialog from '../lib/components/SessionEditDialog.svelte';
+  import SessionSummary from '../lib/components/SessionSummary.svelte';
   import {
     formatEuro,
     formatIsoDate,
     formatKwh,
-    formatPricePerKwh,
   } from '../lib/format';
   import { useStore } from '../lib/store/context';
   import type { ChargingSession, History, SessionFilter, Vehicle } from '../lib/store/store';
@@ -115,21 +115,11 @@
               aria-label="Ladevorgang vom {formatIsoDate(session.date)} bearbeiten"
               onclick={() => (editing = session)}
             >
-              <span class="session-main">
-                <span>{formatIsoDate(session.date)}</span>
-                <span class="cost">{formatEuro(session.costEur)}</span>
-              </span>
-              <span class="session-details">
-                {#if vehicles.length > 1}
-                  {vehicleNames.get(session.vehicleId)} ·
-                {/if}
-                {session.startPercent} → {session.endPercent} % ·
-                {formatKwh(session.gridEnergyKwh)} ·
-                {formatPricePerKwh(session.pricePerKwh)}
-              </span>
-              {#if session.note}
-                <span class="session-details note">{session.note}</span>
-              {/if}
+              <SessionSummary
+                {session}
+                vehicleName={vehicles.length > 1 ? vehicleNames.get(session.vehicleId) : undefined}
+                showPrice
+              />
             </button>
           </li>
         {/each}
@@ -191,7 +181,6 @@
 
   .hint {
     margin: 0;
-    color: var(--color-on-surface-variant);
   }
 
   ul {
@@ -220,23 +209,4 @@
     cursor: pointer;
   }
 
-  .session-main {
-    display: flex;
-    justify-content: space-between;
-    gap: var(--space-3);
-  }
-
-  .cost {
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .session-details {
-    font-size: var(--font-size-label);
-    color: var(--color-on-surface-variant);
-  }
-
-  .note {
-    overflow-wrap: anywhere;
-  }
 </style>

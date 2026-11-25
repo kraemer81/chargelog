@@ -1,6 +1,7 @@
 <script lang="ts">
   import { formatDecimal, parseDecimal } from '../format';
-  import { ValidationError, type NewVehicle } from '../store/store';
+  import { errorMessage } from '../errorMessage';
+  import type { NewVehicle } from '../store/store';
 
   let {
     initial,
@@ -31,12 +32,7 @@
     try {
       await onsubmit({ name, batteryCapacityKwh: parseDecimal(capacity) });
     } catch (e) {
-      if (e instanceof ValidationError) {
-        error = e.message;
-      } else {
-        console.error(e);
-        error = 'Das Fahrzeug konnte nicht gespeichert werden.';
-      }
+      error = errorMessage(e, 'Das Fahrzeug konnte nicht gespeichert werden.');
     } finally {
       saving = false;
     }
@@ -92,12 +88,6 @@
   input:focus {
     outline: 2px solid var(--color-primary);
     outline-offset: -1px;
-  }
-
-  .error {
-    margin: 0;
-    color: var(--color-error);
-    font-size: var(--font-size-label);
   }
 
   .actions {

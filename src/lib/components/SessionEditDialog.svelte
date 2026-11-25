@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { formatEuro, formatIsoDate, formatKwh } from '../format';
+  import { errorMessage } from '../errorMessage';
   import { useStore } from '../store/context';
   import {
     checkCharge,
-    ValidationError,
     type ChargingRates,
     type ChargingSession,
     type Vehicle,
@@ -63,12 +63,7 @@
       await write();
       dialog?.close();
     } catch (e) {
-      if (e instanceof ValidationError) {
-        error = e.message;
-      } else {
-        console.error(e);
-        error = failureMessage;
-      }
+      error = errorMessage(e, failureMessage);
     } finally {
       busy = false;
     }
@@ -102,7 +97,7 @@
 <dialog bind:this={dialog} {onclose} aria-labelledby="session-edit-heading">
   {#if confirmingDelete}
     <h2 id="session-edit-heading">Ladevorgang löschen?</h2>
-    <p class="hint">
+    <p>
       Der Ladevorgang vom {formatIsoDate(session.date)} wird gelöscht. Das lässt sich nicht
       rückgängig machen.
     </p>
@@ -189,23 +184,12 @@
     gap: var(--space-4);
   }
 
-  .hint {
-    margin: 0 0 var(--space-5);
-    color: var(--color-on-surface-variant);
-  }
-
   .preview {
     min-height: 1.5rem;
     color: var(--color-on-surface-variant);
     font-size: var(--font-size-label);
     font-variant-numeric: tabular-nums;
     text-align: center;
-  }
-
-  .error {
-    margin: 0;
-    color: var(--color-error);
-    font-size: var(--font-size-label);
   }
 
   .actions {
