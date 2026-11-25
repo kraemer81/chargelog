@@ -494,11 +494,11 @@ export async function openChargeLogStore(
 
     async addSession(session) {
       const { rates, ...values } = session;
-      return db.transaction('rw', db.vehicles, db.settings, db.sessions, async () => {
-        const row = await sessionRow({
-          ...values,
-          ...(rates ?? defaultRates(await readSettings())),
-        });
+      // Read the defaults beforehand, so the write doesn't lock the settings:
+      // a stuck settings transaction elsewhere must not block saving.
+      const sessionRates = rates ?? defaultRates(await readSettings());
+      return db.transaction('rw', db.vehicles, db.sessions, async () => {
+        const row = await sessionRow({ ...values, ...sessionRates });
         const id = await db.sessions.add(row as ChargingSession);
         return { ...row, id };
       });

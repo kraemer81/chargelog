@@ -36,6 +36,13 @@
             </li>
           {/each}
         </ul>
+        {#if Object.values(readProblems).some((problem) => problem.kind === 'slow')}
+          <!-- A stuck database transaction lives on in the browser, not in the app. -->
+          <p class="read-problems-hint">
+            Beende den Browser ganz (unter Android: Einstellungen → Apps → Chrome → Beenden
+            erzwingen) und öffne die App dann neu.
+          </p>
+        {/if}
         <button type="button" class="text" onclick={() => (readProblems = {})}>Ausblenden</button>
       </section>
     {/if}
@@ -74,6 +81,11 @@
   .read-problems ul {
     margin: 0;
     padding-left: var(--space-4);
+  }
+
+  .read-problems-hint {
+    margin: var(--space-3) 0 0;
+    color: var(--color-on-surface);
   }
 
   .read-problems code {

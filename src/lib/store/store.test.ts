@@ -413,6 +413,25 @@ describe('charging sessions', () => {
 
     expect(await recentSessions()).toEqual([saved]);
   });
+
+  it('saves a session with its own rates while the settings are blocked', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const blocker = await blockSettings();
+
+    const saved = await Promise.race([
+      store.addSession({
+        vehicleId: id3.id,
+        date: '2026-11-25',
+        startPercent: 20,
+        endPercent: 80,
+        rates: { pricePerKwh: 0.3, chargingLossPercent: 10 },
+      }),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 200)),
+    ]);
+    await blocker.release();
+
+    expect(saved).toMatchObject({ vehicleId: id3.id, pricePerKwh: 0.3 });
+  });
 });
 
 describe('history', () => {
@@ -648,24 +667,6 @@ describe('editing and deleting sessions', () => {
   });
 });
 
-/** Current value of the recent-sessions watch. */
-async function recentSessions(limit = 10) {
-  return new Promise<ChargingSession[]>((resolve, reject) => {
-    const subscription = store.watchRecentSessions(limit).subscribe({
-      next(sessions) {
-        resolve(sessions);
-        queueMicrotask(() => subscription.unsubscribe());
-      },
-      error: reject,
-    });
-  });
-}
-
-async function defaultVehicleNames(): Promise<string[]> {
-  const vehicles = await store.listVehicles();
-  return vehicles.filter((vehicle) => vehicle.isDefault).map((vehicle) => vehicle.name);
-}
-
 describe('read problems', () => {
   it('reports a read that fails, naming what could not be read', async () => {
     const problems: ReadProblem[] = [];
@@ -687,21 +688,51 @@ describe('read problems', () => {
     store = await openChargeLogStore(dbName, { slowReadMs: 20 });
     const problems: ReadProblem[] = [];
     store.onReadProblem((problem) => problems.push(problem));
-    // A long write from another connection blocks every read of the settings until it ends.
-    let writing = true;
-    const other = await new Dexie(dbName).open();
-    const blocker = other.transaction('rw', 'settings', async () => {
-      while (writing) await other.table('settings').get('themePreference');
-    });
+    const blocker = await blockSettings();
 
     const settings = await new Promise<Settings>((resolve) => {
       store.watchSettings().subscribe(resolve);
-      setTimeout(() => (writing = false), 100);
+      setTimeout(() => void blocker.release(), 100);
     });
-    await blocker;
-    other.close();
 
     expect(settings.themePreference).toBe('system');
     expect(problems).toEqual([expect.objectContaining({ data: 'Einstellungen', kind: 'slow' })]);
   });
 });
+
+/**
+ * Holds a never-ending write on the settings from another connection, like a
+ * frozen tab would, blocking every other access to them until released.
+ */
+async function blockSettings() {
+  let writing = true;
+  const other = await new Dexie(dbName).open();
+  const transaction = other.transaction('rw', 'settings', async () => {
+    while (writing) await other.table('settings').get('themePreference');
+  });
+  return {
+    async release() {
+      writing = false;
+      await transaction;
+      other.close();
+    },
+  };
+}
+
+/** Current value of the recent-sessions watch. */
+async function recentSessions(limit = 10) {
+  return new Promise<ChargingSession[]>((resolve, reject) => {
+    const subscription = store.watchRecentSessions(limit).subscribe({
+      next(sessions) {
+        resolve(sessions);
+        queueMicrotask(() => subscription.unsubscribe());
+      },
+      error: reject,
+    });
+  });
+}
+
+async function defaultVehicleNames(): Promise<string[]> {
+  const vehicles = await store.listVehicles();
+  return vehicles.filter((vehicle) => vehicle.isDefault).map((vehicle) => vehicle.name);
+}
