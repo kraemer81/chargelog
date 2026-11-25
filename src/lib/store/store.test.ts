@@ -146,6 +146,65 @@ describe('vehicles', () => {
     expect((await store.listVehicles())[0]?.name).toBe('ID.3');
   });
 
+  it("recalculates only that vehicle's sessions with their own rates when asked to", async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const outlander = await store.addVehicle({ name: 'Outlander', batteryCapacityKwh: 20 });
+    const cheap = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-23',
+      startPercent: 20,
+      endPercent: 80,
+      rates: { pricePerKwh: 0.3, chargingLossPercent: 10 },
+    });
+    const dear = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 50,
+      endPercent: 100,
+      rates: { pricePerKwh: 0.5, chargingLossPercent: 20 },
+    });
+    const other = await store.addSession({
+      vehicleId: outlander.id,
+      date: '2026-11-24',
+      startPercent: 0,
+      endPercent: 100,
+    });
+    await store.updateSettings({ defaultPricePerKwh: 0.9, defaultChargingLossPercent: 50 });
+
+    await store.updateVehicle(
+      id3.id,
+      { name: 'ID.3', batteryCapacityKwh: 62 },
+      { recalculateSessions: true },
+    );
+
+    // 62 kWh × 60 % × 1.1 = 40.92 kWh; × 0.30 €/kWh = 12.28 €.
+    // 62 kWh × 50 % × 1.2 = 37.2 kWh; × 0.50 €/kWh = 18.6 €.
+    expect((await store.getHistory({})).sessions).toEqual([
+      other,
+      { ...dear, gridEnergyKwh: 37.2, costEur: 18.6 },
+      { ...cheap, gridEnergyKwh: 40.92, costEur: 12.28 },
+    ]);
+  });
+
+  it('keeps the sessions unchanged when the capacity changes without recalculation', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const saved = await store.addSession({
+      vehicleId: id3.id,
+      date: '2026-11-24',
+      startPercent: 20,
+      endPercent: 80,
+    });
+
+    await store.updateVehicle(
+      id3.id,
+      { name: 'ID.3', batteryCapacityKwh: 62 },
+      { recalculateSessions: false },
+    );
+
+    expect((await store.getHistory({})).sessions).toEqual([saved]);
+    expect((await store.listVehicles())[0]?.batteryCapacityKwh).toBe(62);
+  });
+
   it('moves the default to the chosen vehicle', async () => {
     await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
     const outlander = await store.addVehicle({ name: 'Outlander', batteryCapacityKwh: 20 });

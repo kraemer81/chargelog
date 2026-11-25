@@ -12,6 +12,11 @@
   let editing = $state<'new' | number | undefined>();
   let pendingDelete = $state<{ vehicle: Vehicle; sessionCount: number } | undefined>();
   let dialog = $state<HTMLDialogElement>();
+  /** Set while asking whether to recalculate sessions after a capacity change. */
+  let pendingRecalculation = $state<
+    { sessionCount: number; answer: (recalculate: boolean | undefined) => void } | undefined
+  >();
+  let recalculationDialog = $state<HTMLDialogElement>();
 
   const subscription = store.watchVehicles().subscribe((list) => {
     vehicles = list;
@@ -23,9 +28,37 @@
     editing = undefined;
   }
 
-  async function update(id: number, vehicle: NewVehicle) {
-    await store.updateVehicle(id, vehicle);
+  async function update(current: Vehicle, changes: NewVehicle) {
+    const recalculateSessions = await askRecalculation(current, changes);
+    if (recalculateSessions === undefined) return;
+    await store.updateVehicle(current.id, changes, { recalculateSessions });
     editing = undefined;
+  }
+
+  /**
+   * Whether to recalculate the vehicle's sessions: asks only if the capacity
+   * changes and sessions exist. `undefined` when the user cancels.
+   */
+  async function askRecalculation(
+    current: Vehicle,
+    changes: NewVehicle,
+  ): Promise<boolean | undefined> {
+    const capacity = changes.batteryCapacityKwh;
+    // An invalid capacity is rejected by the store; no need to ask first.
+    if (!(capacity > 0) || capacity === current.batteryCapacityKwh) return false;
+    const sessionCount = await store.countSessions(current.id);
+    if (sessionCount === 0) return false;
+    return new Promise((resolve) => {
+      pendingRecalculation = { sessionCount, answer: resolve };
+      recalculationDialog?.showModal();
+    });
+  }
+
+  /** Also runs on every close, e.g. Escape; after an answer the state is already cleared. */
+  function answerRecalculation(recalculate: boolean | undefined) {
+    pendingRecalculation?.answer(recalculate);
+    pendingRecalculation = undefined;
+    recalculationDialog?.close();
   }
 
   async function askDelete(vehicle: Vehicle) {
@@ -62,7 +95,7 @@
           <VehicleForm
             initial={vehicle}
             submitLabel="Speichern"
-            onsubmit={(changes) => update(vehicle.id, changes)}
+            onsubmit={(changes) => update(vehicle, changes)}
             oncancel={() => (editing = undefined)}
           />
         {:else}
@@ -119,6 +152,34 @@
         <button type="button" class="text" onclick={() => dialog?.close()}>Abbrechen</button>
         <button type="button" class="filled danger" onclick={() => void confirmDelete()}>
           Löschen
+        </button>
+      </div>
+    {/if}
+  </dialog>
+
+  <dialog
+    bind:this={recalculationDialog}
+    onclose={() => answerRecalculation(undefined)}
+    aria-labelledby="recalculation-heading"
+  >
+    {#if pendingRecalculation}
+      <h2 id="recalculation-heading">Ladevorgänge neu berechnen?</h2>
+      <p>
+        {pendingRecalculation.sessionCount === 1
+          ? 'Für dieses Fahrzeug ist 1 Ladevorgang gespeichert.'
+          : `Für dieses Fahrzeug sind ${pendingRecalculation.sessionCount} Ladevorgänge gespeichert.`}
+        Sollen Energie und Kosten mit der neuen Akkukapazität neu berechnet werden, z. B. um einen
+        Tippfehler zu korrigieren? Preis und Ladeverlust jedes Ladevorgangs bleiben dabei erhalten.
+      </p>
+      <div class="dialog-actions">
+        <button type="button" class="text" onclick={() => answerRecalculation(undefined)}>
+          Abbrechen
+        </button>
+        <button type="button" class="text" onclick={() => answerRecalculation(false)}>
+          Beibehalten
+        </button>
+        <button type="button" class="filled" onclick={() => answerRecalculation(true)}>
+          Neu berechnen
         </button>
       </div>
     {/if}

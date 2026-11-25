@@ -331,8 +331,17 @@ export interface ChargeLogStore {
   /** Emits the current vehicles and again after every change. */
   watchVehicles(): Observable<Vehicle[]>;
   addVehicle(vehicle: NewVehicle): Promise<Vehicle>;
-  /** Replaces name and battery capacity; existing charging sessions are not recalculated. */
-  updateVehicle(id: number, changes: NewVehicle): Promise<void>;
+  /**
+   * Replaces name and battery capacity. Existing charging sessions keep their
+   * grid energy and cost unless `recalculateSessions` is set: then this
+   * vehicle's sessions are recalculated with the new capacity and each
+   * session's own price and charging loss.
+   */
+  updateVehicle(
+    id: number,
+    changes: NewVehicle,
+    options?: { recalculateSessions?: boolean },
+  ): Promise<void>;
   /** Makes this vehicle the only default vehicle. */
   setDefaultVehicle(id: number): Promise<void>;
   /** Deletes the vehicle together with all of its charging sessions. */
@@ -531,10 +540,20 @@ export async function openChargeLogStore(
       });
     },
 
-    async updateVehicle(id, changes) {
-      await db.transaction('rw', db.vehicles, async () => {
+    async updateVehicle(id, changes, { recalculateSessions = false } = {}) {
+      await db.transaction('rw', db.vehicles, db.sessions, async () => {
         const valid = await validateVehicle(changes, id);
         await db.vehicles.update(id, valid);
+        if (!recalculateSessions) return;
+        await db.sessions
+          .where('vehicleId')
+          .equals(id)
+          .modify((session) => {
+            Object.assign(
+              session,
+              calculateCharge({ ...session, batteryCapacityKwh: valid.batteryCapacityKwh }),
+            );
+          });
       });
     },
 
