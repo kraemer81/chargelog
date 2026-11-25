@@ -7,13 +7,13 @@
   import DateInput from '../lib/components/DateInput.svelte';
   import PercentRangeInput from '../lib/components/PercentRangeInput.svelte';
   import SessionSummary from '../lib/components/SessionSummary.svelte';
+  import SessionTotalsList from '../lib/components/SessionTotalsList.svelte';
   import {
     formatDecimal,
     formatEuro,
     formatKwh,
     formatMonth,
     formatPricePerKwh,
-    sessionsLabel,
     todayIsoDate,
   } from '../lib/format';
   import { errorMessage } from '../lib/errorMessage';
@@ -265,20 +265,7 @@
   {#if monthTotals}
     <section class="card" aria-label="Dieser Monat">
       <h2>{formatMonth(currentMonth)}</h2>
-      <dl class="month">
-        <div>
-          <dt>{sessionsLabel(monthTotals.sessionCount)}</dt>
-          <dd>{monthTotals.sessionCount}</dd>
-        </div>
-        <div>
-          <dt>Aus dem Netz</dt>
-          <dd>{formatKwh(monthTotals.gridEnergyKwh)}</dd>
-        </div>
-        <div>
-          <dt>Kosten</dt>
-          <dd>{formatEuro(monthTotals.costEur)}</dd>
-        </div>
-      </dl>
+      <SessionTotalsList totals={monthTotals} />
     </section>
   {/if}
 
@@ -393,29 +380,6 @@
 
   .preview .error {
     align-self: center;
-  }
-
-  .month {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--space-3);
-    margin: 0;
-  }
-
-  .month div {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .month dt {
-    font-size: var(--font-size-label);
-    color: var(--color-on-surface-variant);
-  }
-
-  .month dd {
-    margin: 0;
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
   }
 
   ul {

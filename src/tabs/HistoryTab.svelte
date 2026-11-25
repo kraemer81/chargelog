@@ -4,11 +4,11 @@
   import MonthlyChart from '../lib/components/MonthlyChart.svelte';
   import SessionEditDialog from '../lib/components/SessionEditDialog.svelte';
   import SessionSummary from '../lib/components/SessionSummary.svelte';
+  import SessionTotalsList from '../lib/components/SessionTotalsList.svelte';
   import {
     formatEuro,
     formatIsoDate,
     formatKwh,
-    sessionsLabel,
   } from '../lib/format';
   import { useStore } from '../lib/store/context';
   import type { ChargingSession, History, SessionFilter, Vehicle } from '../lib/store/store';
@@ -78,24 +78,7 @@
 
 {#if history}
   <section class="card" aria-label="Summen">
-    <dl class="totals">
-      <div>
-        <dt>{sessionsLabel(history.totals.sessionCount)}</dt>
-        <dd>{history.totals.sessionCount}</dd>
-      </div>
-      <div>
-        <dt>Kosten</dt>
-        <dd>{formatEuro(history.totals.costEur)}</dd>
-      </div>
-      <div>
-        <dt>Aus dem Netz</dt>
-        <dd>{formatKwh(history.totals.gridEnergyKwh)}</dd>
-      </div>
-      <div>
-        <dt>In den Akku</dt>
-        <dd>{formatKwh(history.totals.batteryEnergyKwh)}</dd>
-      </div>
-    </dl>
+    <SessionTotalsList totals={history.totals} showBatteryEnergy />
   </section>
 
   {#if history.months.length > 0}
@@ -179,30 +162,6 @@
   .filter .reset {
     justify-self: end;
     margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-3)) calc(-1 * var(--space-2)) 0;
-  }
-
-  .totals {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-3);
-    margin: 0;
-  }
-
-  .totals div {
-    display: flex;
-    flex-direction: column;
-  }
-
-  dt {
-    font-size: var(--font-size-label);
-    color: var(--color-on-surface-variant);
-  }
-
-  dd {
-    margin: 0;
-    font-size: 1.25rem;
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
   }
 
   .hint {
