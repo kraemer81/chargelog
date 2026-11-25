@@ -1161,6 +1161,62 @@ describe('legacy EV-Charter backup', () => {
   });
 });
 
+describe('CSV export', () => {
+  const BOM = '\uFEFF';
+  const HEADER =
+    'Datum;Fahrzeug;Akkukapazität (kWh);Start (%);Ende (%);Geladen (%);' +
+    'Aus dem Netz (kWh);In den Akku (kWh);Preis (€/kWh);Ladeverlust (%);Kosten (€);Notiz';
+
+  it('lists the sessions newest first in a German Excel format', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const outlander = await store.addVehicle({ name: 'Outlander', batteryCapacityKwh: 20 });
+    await store.addSession({ vehicleId: id3.id, date: '2026-11-01', startPercent: 20, endPercent: 80, note: 'Wallbox' });
+    await store.addSession({
+      vehicleId: outlander.id,
+      date: '2026-11-02',
+      startPercent: 10,
+      endPercent: 100,
+      rates: { pricePerKwh: 0.25, chargingLossPercent: 12 },
+    });
+
+    expect(await store.exportCsv({})).toBe(
+      BOM +
+        `${HEADER}\r\n` +
+        '02.11.2026;Outlander;20;10;100;90;20,16;18;0,25;12;5,04;\r\n' +
+        '01.11.2026;ID.3;58;20;80;60;38,28;34,8;0,3;10;11,48;Wallbox\r\n',
+    );
+  });
+
+  it('contains only the sessions matching the filter', async () => {
+    const id3 = await store.addVehicle({ name: 'ID.3', batteryCapacityKwh: 58 });
+    const outlander = await store.addVehicle({ name: 'Outlander', batteryCapacityKwh: 20 });
+    await store.addSession({ vehicleId: id3.id, date: '2026-10-31', startPercent: 20, endPercent: 80 });
+    await store.addSession({ vehicleId: id3.id, date: '2026-11-01', startPercent: 20, endPercent: 80 });
+    await store.addSession({ vehicleId: outlander.id, date: '2026-11-02', startPercent: 10, endPercent: 100 });
+
+    const csv = await store.exportCsv({ vehicleId: id3.id, from: '2026-11-01' });
+
+    expect(csv.split('\r\n').slice(1, -1).map((row) => row.split(';')[0])).toEqual(['01.11.2026']);
+  });
+
+  it('quotes notes and vehicle names containing semicolons, quotes or line breaks', async () => {
+    const vehicle = await store.addVehicle({ name: 'Kona; "Elektro"', batteryCapacityKwh: 64 });
+    await store.addSession({
+      vehicleId: vehicle.id,
+      date: '2026-11-01',
+      startPercent: 20,
+      endPercent: 80,
+      note: 'Wallbox\r\nbei Oma',
+    });
+
+    const [, row] = (await store.exportCsv({})).split(/\r\n(?=\d)/);
+
+    expect(row).toBe(
+      '01.11.2026;"Kona; ""Elektro""";64;20;80;60;42,24;38,4;0,3;10;12,67;"Wallbox\r\nbei Oma"\r\n',
+    );
+  });
+});
+
 describe('deleting all data', () => {
   it('removes vehicles and sessions and resets the settings to their defaults', async () => {
     await store.updateSettings({ themePreference: 'dark', defaultPricePerKwh: 0.32 });

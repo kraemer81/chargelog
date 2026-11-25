@@ -1,6 +1,7 @@
 import Dexie, { liveQuery, type EntityTable, type Observable } from 'dexie';
 import { todayIsoDate } from '../format';
 import { createBackup, type Backup } from './backup';
+import { sessionsCsv } from './csv';
 import {
   chargingLossError,
   DEFAULT_SETTINGS,
@@ -336,6 +337,11 @@ export interface ChargeLogStore {
   watchHistory(filter: SessionFilter): Observable<History>;
   /** Number of charging sessions logged for this vehicle. */
   countSessions(vehicleId: number): Promise<number>;
+  /**
+   * The sessions matching the filter, in the history's order, as a CSV file
+   * for a German Excel; see `sessionsCsv`.
+   */
+  exportCsv(filter: SessionFilter): Promise<string>;
   /** A backup of all settings, vehicles and charging sessions. */
   exportBackup(): Promise<Backup>;
   /** Replaces all data with the backup's, in a single transaction. */
@@ -599,6 +605,13 @@ export async function openChargeLogStore(
 
     countSessions(vehicleId) {
       return db.sessions.where('vehicleId').equals(vehicleId).count();
+    },
+
+    async exportCsv(filter) {
+      return db.transaction('r', db.vehicles, db.sessions, async () => {
+        const { sessions } = await readHistory(filter);
+        return sessionsCsv(sessions, await db.vehicles.toArray());
+      });
     },
 
     async exportBackup() {

@@ -6,11 +6,9 @@
   import EditIcon from '../lib/components/EditIcon.svelte';
   import SessionSummary from '../lib/components/SessionSummary.svelte';
   import SessionTotalsList from '../lib/components/SessionTotalsList.svelte';
-  import {
-    formatEuro,
-    formatIsoDate,
-    formatKwh,
-  } from '../lib/format';
+  import { errorDetail, errorMessage } from '../lib/errorMessage';
+  import { formatEuro, formatIsoDate, formatKwh, todayIsoDate } from '../lib/format';
+  import { saveFile } from '../lib/saveFile';
   import { useStore } from '../lib/store/context';
   import type { ChargingSession, History, SessionFilter, Vehicle } from '../lib/store/store';
 
@@ -55,6 +53,29 @@
     const subscription = store.watchHistory(filter).subscribe((value) => (history = value));
     return () => subscription.unsubscribe();
   });
+
+  let exporting = $state(false);
+  let exportError = $state<string | undefined>();
+  /** Technical details of an unexpected export error, for diagnosing it on the phone. */
+  let exportDetail = $state<string | undefined>();
+
+  async function exportCsv() {
+    exportError = undefined;
+    exportDetail = undefined;
+    exporting = true;
+    try {
+      const csv = await store.exportCsv(filter);
+      const file = new File([csv], `chargelog-ladevorgaenge-${todayIsoDate()}.csv`, {
+        type: 'text/csv;charset=utf-8',
+      });
+      await saveFile(file);
+    } catch (e) {
+      exportError = errorMessage(e, 'Die CSV-Datei konnte nicht erstellt werden.');
+      exportDetail = errorDetail(e);
+    } finally {
+      exporting = false;
+    }
+  }
 
   function resetFilter() {
     vehicleFilter = '';
@@ -120,6 +141,17 @@
         <button type="button" class="text more" onclick={() => (shownCount += PAGE_SIZE)}>
           Weitere anzeigen
         </button>
+      {/if}
+      <div class="export">
+        <button type="button" class="tonal" disabled={exporting} onclick={() => void exportCsv()}>
+          Als CSV exportieren
+        </button>
+      </div>
+      {#if exportError}
+        <p class="error" role="alert">
+          {exportError}
+          {#if exportDetail}<code>{exportDetail}</code>{/if}
+        </p>
       {/if}
     {/if}
   </section>
@@ -259,5 +291,21 @@
   .more {
     display: block;
     margin: var(--space-2) auto 0;
+  }
+
+  .export {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: var(--space-3);
+  }
+
+  .error {
+    margin-top: var(--space-3);
+  }
+
+  .error code {
+    display: block;
+    overflow-wrap: anywhere;
+    color: var(--color-on-surface-variant);
   }
 </style>
